@@ -1,0 +1,34 @@
+#pragma once
+
+#include <ostream>
+{% for e in headers %}
+#include "{{e}}"
+{% endfor %}
+
+{% for e in enums %}
+inline std::ostream  &operator<<(std::ostream &os, {{e.decl}} v){
+    os << "{{e.decl}}{";
+    switch(v){
+        {% for v in e['values'] %}
+        case {{e.decl}}::{{v}}: os << "{{v}}";break;
+        {% endfor %}
+    }
+    os << "}";
+    return os;
+}
+{% endfor %}
+
+{% for e in structs %}
+inline std::ostream &operator<<(std::ostream &os, const {{e.decl}} &v) {
+    os << "{{e.decl}}{";
+    {% for m in e.members %}
+    {% if loop.index == 1 %}
+    os << "{{m.decl}} = "<<v.{{m.decl}};    
+    {% else %}
+    os << ",{{m.decl}} = "<<v.{{m.decl}};   
+    {% endif %}
+    {% endfor %}
+    os << "}";
+    return os;  
+}
+{% endfor %}
