@@ -131,8 +131,7 @@ namespace v1
         };
     };
 
-
-    template<typename T, typename R>
+    template<typename R>
     struct AwaitableSignalBase {
         template<typename U, typename... Args>
         AwaitableSignalBase(U* obj, void(U::* m)(Args...),
@@ -150,8 +149,8 @@ namespace v1
         QMetaObject::Connection conn_;
     };
 
-    template<typename T>
-    struct AwaitableSignalBase<T, void> {
+    template<>
+    struct AwaitableSignalBase<void> {
         template<typename U, typename... Args>
         AwaitableSignalBase(U* obj, void(U::* m)(Args...),
             std::coroutine_handle<>& handle)
@@ -220,17 +219,17 @@ namespace v1
     };
 
     template<typename F, typename R = typename Impl<F>::type>
-    struct AwaitableSignal :AwaitableSignalBase<AwaitableSignal<F, R>, R>
+    struct AwaitableSignal :AwaitableSignalBase<R>
     {
-#if 0
+    #if 0
         using obj_t = typename Impl<F>::class_t;
         AwaitableSignal(obj_t* o, F m)
-            :AwaitableSignalBase<AwaitableSignal, R>(o, m, coro_)
+            :AwaitableSignalBase<R>(o, m, coro_)
         {};
-#endif
+    #endif
         template<typename U>
         AwaitableSignal(U* o, F m)
-            :AwaitableSignalBase<AwaitableSignal, R>(o, m, coro_)
+            :AwaitableSignalBase<R>(o, m, coro_)
         {};
 
         struct awaiter {
