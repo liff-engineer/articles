@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
         .inject<std::string, std::size_t>()
     );
 
-    std::string str1 = "liff-b@glodon.com";
+    std::string str1 = "liff.engineer@gmail.com";
     std::cout << "str1(" << str1 << ") length:" << broker.dispatch<std::size_t>(str1) << "\n";
 
     std::string str2 = "dispatcher";
