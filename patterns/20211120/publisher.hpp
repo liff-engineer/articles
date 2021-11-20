@@ -1,9 +1,10 @@
 ﻿#pragma once
 #include <type_traits>
-#include <memory>
-#include <cassert>
 #include <string_view>
 #include <functional>
+#include <memory>
+#include <vector>
+#include <cassert>
 
 //编译期类型ID机制可参考 https://stackoverflow.com/a/56600402
 //这里只是演示
@@ -21,6 +22,9 @@ constexpr type_code type_code_of() noexcept {
 #error "Unsupported compiler"
 #endif
 }
+
+/// @brief 订阅存根单元,用来取消订阅
+using subscribe_stub_unit = std::function<void()>;
 
 /// @brief 消息发布者
 class publisher {
@@ -71,8 +75,6 @@ class publisher {
     };
     std::vector<stub> m_stubs;
 public:
-    /// @brief 订阅存根,用来取消订阅
-    using subscribe_stub = std::function<void()>;
     publisher() = default;
 
     /// @brief 发布消息
@@ -100,9 +102,8 @@ public:
         /// @param fn 消息处理函数
         /// @return 订阅存根
         template<typename Fn>
-        subscribe_stub subsrcibe(Fn&& fn) {
+        subscribe_stub_unit subsrcibe(Fn&& fn) {
             assert(owner != nullptr);
-
             auto handler = std::make_shared<message_handler<Fn, T>>(std::move(fn));
             owner->m_stubs.emplace_back(stub{ type_code_of<T>(),handler });
             return[h = std::move(handler)](){};
@@ -122,23 +123,23 @@ public:
 class subscribe_stub {
 public:
     subscribe_stub() = default;
-    subscribe_stub(publisher::subscribe_stub&& stub)
+    subscribe_stub(subscribe_stub_unit&& stub)
     {
-        m_stubs.emplace_back(std::move(stub));
+        m_actions.emplace_back(std::move(stub));
     }
-    subscribe_stub(std::vector<publisher::subscribe_stub>&& stubs)
-        :m_stubs(std::move(stubs)) {};
+    subscribe_stub(std::vector<subscribe_stub_unit>&& stubs)
+        :m_actions(std::move(stubs)) {};
 
     subscribe_stub(subscribe_stub const&) = delete;
     subscribe_stub& operator=(subscribe_stub const&) = delete;
 
     subscribe_stub(subscribe_stub&& other) noexcept
-        :m_stubs(std::move(other.m_stubs)) {};
+        :m_actions(std::move(other.m_actions)) {};
 
     subscribe_stub& operator=(subscribe_stub&& other) noexcept {
         if (std::addressof(other) != this) {
             unsubscribe();
-            m_stubs = std::move(other.m_stubs);
+            m_actions = std::move(other.m_actions);
         }
         return *this;
     }
@@ -148,123 +149,99 @@ public:
         catch (...) {};
     }
 
-    subscribe_stub& operator+=(publisher::subscribe_stub&& stub) noexcept {
-        m_stubs.emplace_back(std::move(stub));
+    subscribe_stub& operator+=(subscribe_stub_unit&& stub) noexcept {
+        m_actions.emplace_back(std::move(stub));
         return *this;
     }
 
     subscribe_stub& operator+=(subscribe_stub&& other) noexcept {
         if (std::addressof(other) != this) {
-            for (auto& stub : other.m_stubs) {
-                m_stubs.emplace_back(std::move(stub));
+            m_actions.reserve(m_actions.size() + other.m_actions.size());
+            for (auto& stub : other.m_actions) {
+                m_actions.emplace_back(std::move(stub));
             }
-            other.m_stubs.clear();
+            other.m_actions.clear();
         }
         return *this;
     }
 
     void unsubscribe() {
-        for (auto& h : m_stubs) {
+        for (auto& h : m_actions) {
             if (h) h();
         }
-        m_stubs.clear();
+        m_actions.clear();
     }
 private:
-    std::vector<publisher::subscribe_stub> m_stubs;
+    std::vector<subscribe_stub_unit> m_actions;
 };
 
-/// @brief 自定义消息源扩展点
+/// @brief 消息源订阅辅助类(支持自定义消息源扩展)
 /// @tparam T 消息源类型
 /// @tparam E 使能
 template<typename T, typename E = void>
 struct subscribe_helper;
+
+/// @brief 发布者信道的默认实现
+/// @tparam T 
+template<typename T>
+struct subscribe_helper<publisher::channel_stub<T>> {
+    template<typename Fn>
+    static subscribe_stub_unit subscribe(publisher::channel_stub<T> channel, Fn&& fn) {
+        return channel.subsrcibe(std::move(fn));
+    }
+};
 
 /// @brief 订阅辅助类,支持链式调用,可采用类型的on方法建立订阅
 /// @tparam T 消息处理类
 template<typename T>
 class subscriber {
     T* m_obj{};
-    std::vector<publisher::subscribe_stub> m_stubs;
+    subscribe_stub m_stub;
 public:
-    explicit subscriber(T* obj) :m_obj(obj) { assert(m_obj != nullptr); };
+    explicit subscriber(T& obj) :m_obj(std::addressof(obj)) {};
 
     template<typename U, typename Fn>
-    subscriber& subscribe(publisher::channel_stub<U> channel, Fn&& fn) {
-        assert(channel.owner != nullptr);
-        m_stubs.emplace_back(
-            channel.subsrcibe(
-                [obj = m_obj, h = std::move(fn)](auto arg){
-            std::invoke(h, obj, arg);
-        })
+    subscriber& subscribe(U& source, Fn&& fn) {
+        m_stub += subscribe_helper<std::decay_t<U>>::subscribe(source,
+            [obj = m_obj, h = std::move(fn)](auto arg){ std::invoke(h, obj, arg); }
         );
         return *this;
     }
 
     template<typename U>
-    subscriber& subscribe(publisher::channel_stub<U> channel) {
-        return subscribe(channel, [](auto obj, auto arg) { obj->on(arg); });
+    subscriber& subscribe(U& source) {
+        m_stub += subscribe_helper<std::decay_t<U>>::subscribe(source,
+            [obj = m_obj](auto& arg) { obj->on(arg); }
+        );
+        return *this;
     }
 
     template<typename U, typename Fn>
-    subscriber& subscribe(publisher* o, Fn&& fn) {
-        assert(o != nullptr);
-        return subscribe(o->channel<U>(), std::move(fn));
+    subscriber& subscribe(publisher& o, Fn&& fn) {
+        return subscribe(o.channel<U>(), std::move(fn));
     }
 
     template<typename... Us>
-    subscriber& subscribe(publisher* o) {
-        assert(o != nullptr);
-        (subscribe(o->channel<Us>()),...);
+    subscriber& subscribe(publisher& o) {
+        (subscribe(o.channel<Us>()), ...);
         return *this;
-    }
-
-    template<typename U, typename Fn>
-    subscriber& subscribe(U* source, Fn&& fn) {
-        assert(source != nullptr);
-        m_stubs.emplace_back(
-            subscribe_helper<std::decay_t<U>>::subscribe(source,
-                [obj = m_obj, h = std::move(fn)](auto arg){
-            std::invoke(h, obj, arg);
-        })
-        );
-        return *this;
-    }
-
-    template<typename U>
-    subscriber& subscribe(U* source) {
-        assert(source != nullptr);
-        return subscribe(source, [](auto obj, auto arg) { obj->on(arg); });
     }
 
     operator subscribe_stub() noexcept {
-        return subscribe_stub{ std::move(m_stubs) };
+        return subscribe_stub{ std::move(m_stub) };
     }
 };
 
 template<typename T>
-subscriber(T* obj)->subscriber<T>;
+subscriber(T& obj)->subscriber<T>;
 
-/// @brief 针对自定义消息源进行订阅的自由函数
+/// @brief 针对消息源进行订阅的自由函数
 /// @tparam T 消息源类型
 /// @tparam Fn 消息处理函数类型
 /// @param source 消息源
 /// @param fn 消息处理函数
 /// @return 订阅存根
 template<typename T, typename Fn>
-subscribe_stub subscribe(T* source, Fn&& fn) {
-    return subscribe_stub(
-        subscribe_helper<std::decay_t<T>>::subscribe(source, std::move(fn))
-    );
-}
-
-/// @brief 针对发布者,基于信道订阅的自由函数
-/// @tparam T 消息类型
-/// @tparam Fn 消息处理函数类型
-/// @param channel 信道
-/// @param fn 消息处理函数
-/// @return 订阅存根
-template<typename T, typename Fn>
-subscribe_stub subscribe(publisher::channel_stub<T> channel, Fn&& fn) {
-    assert(channel.owner != nullptr);
-    return subscribe_stub(channel.subsrcibe(std::move(fn)));
+subscribe_stub subscribe(T& source, Fn&& fn) {
+    return subscribe_helper<std::decay_t<T>>::subscribe(source, std::move(fn));
 }

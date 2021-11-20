@@ -72,14 +72,14 @@ int:22
 struct Actor {
     subscribe_stub stub;
 
-    void launch(publisher* source) {
+    void launch(publisher& source) {
         assert(source != nullptr);
         //存根可追加,
         stub += subscribe(source->channel<bool>(), [](auto arg) {
             std::cout << "bool:" << std::boolalpha << arg << "\n";
             });
         //支持链式调用,可利用on成员函数
-        stub += subscriber(this)
+        stub += subscriber(*this)
             .subscribe<double>(source)
             .subscribe(source->channel<std::string>());
     }
@@ -102,7 +102,7 @@ publisher source{};
 
 //消息处理类的用法
 Actor actor{};
-actor.launch(&source);
+actor.launch(source);
 
 source.publish(false);
 source.publish(1.414);
@@ -181,14 +181,13 @@ struct subscribe_helper<Subject> {
 
     /// @brief subscribe_helper必须提供该静态函数实现
     template<typename Fn>
-    static publisher::subscribe_stub subscribe(Subject* source, Fn&& fn) {
-        assert(source != nullptr);
+    static subscribe_stub_unit subscribe(Subject& source, Fn&& fn) {
         //构造观察者
         auto handler = std::make_shared<Observer<Fn>>(std::move(fn));
         //添加观察者
-        source->Attach(handler.get());
+        source.Attach(handler.get());
         //返回函数,注意函数执行时会移除观察者
-        return[src = source, h = std::move(handler)]() {
+        return[src = std::addressof(source), h = std::move(handler)]() {
             src->Detach(h.get());
         };
     }
@@ -201,8 +200,8 @@ struct subscribe_helper<Subject> {
 struct Actor {
     subscribe_stub stub;
 	//...省略的内容
-    void launch(Subject* source) {
-        stub += subscriber(this).subscribe(source,
+    void launch(Subject& source) {
+        stub += subscriber(*this).subscribe(source,
             [](auto obj, Payload const& arg) {
                 std::cout << "Actor>>Payload:(" << arg.iV << "," << arg.dV << ")\n";
             });
@@ -217,9 +216,9 @@ struct Actor {
 Actor actor{};
 //自定义消息源的使用
 Subject subject{};
-actor.launch(&subject);
+actor.launch(subject);
 {
-    auto stub = subscribe(&subject, [](Payload const& arg) {
+    auto stub = subscribe(subject, [](Payload const& arg) {
         std::cout << "Payload:(" << arg.iV << "," << arg.dV << ")\n";
     });
 
