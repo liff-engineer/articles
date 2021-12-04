@@ -32,6 +32,9 @@ void example() {
     actor.launch(client);
 
     {
+        auto astub = bind(client.endpoint<int, double>(), 
+            [](auto&& query, auto&& reply) 
+            { reply = query * 2.0; });
         double dV = {};
         client.request(10, dV);
         std::cout << "responce:" << dV << "\n";
@@ -39,7 +42,9 @@ void example() {
         client.request(1, dV);
         std::cout << "responce:" << dV << "\n";
     }
-    stub += bind(client.endpoint<int, double>(), [](auto&& query, auto&& reply) { reply = query * 2.0; });
+    stub += bind(client.endpoint<int, double>(), 
+        [](auto&& query, auto&& reply) 
+        { reply = query * 2.0; });
 
     auto v1 = client.request(2, response<double>{});
     auto v2 = client.request(10, response<double>{});
