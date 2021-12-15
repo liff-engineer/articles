@@ -9,7 +9,7 @@ int main(int argc, char** argv) {
         e.assign(1024, std::string{ "liff.engineer@gmail.com" });
     }
     {
-        auto e = repo.create();
+        repository::entity_view<double,std::string> e = repo.create();
         e.assign(3.1415926, std::string{ "liff.engineer@gmail.com" });
     }
     
