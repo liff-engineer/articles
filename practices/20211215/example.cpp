@@ -105,29 +105,33 @@ struct RepositorySerializer {
 /// @brief 逻辑类型
 template<typename T, typename Tag>
 struct LogicType {
-    using UnderlyingType = T;
+//    using UnderlyingType = T;
     T  v{};
 };
 
-
 template<typename T, typename U>
-struct abc::logic_type_traits<LogicType<T, U>> : std::true_type {
-    using underlying_type = T;
+struct abc::project<LogicType<T, U>> :std::true_type {
+    using type = T;
 
-    T& get(LogicType<T, U>& o) const noexcept { return o.v; }
-    const T& get(const LogicType<T, U>& o) const noexcept { return o.v; }
+    static T& to(LogicType<T, U>& o) noexcept {
+        return o.v;
+    }
+
+    static const T& to(const LogicType<T, U>& o) noexcept {
+        return o.v;
+    }
 };
 
 using  Description = LogicType<std::string, struct description_tag>;
 
-struct TestObject {
+struct TestObject1 {
     int* iV{};
     double* dV{};
     std::string sV{};
     std::string description{};
 
-    static TestObject Build(entity_view<> e) {
-        TestObject result{};
+    static TestObject1 Build(entity_view<> e) {
+        TestObject1 result{};
         e.project(result.iV, result.dV, result.sV,
             tie<Description>(result.description));
         return result;
@@ -138,25 +142,42 @@ int main(int argc, char** argv) {
     repository repo{};
     {
         auto e = repo.create();
-        e.assign(1024, std::string{ "liff.engineer@gmail.com" });
+        e.assign(1024,1.414, std::string{ "liff.engineer@gmail.com" });
     }
     {
         entity_view<double, std::string> e = repo.create();
-        e.assign(3.1415926, std::string{ "liff-b@glodon.com" });
+        e.assign(456,3.1415926, std::string{ "liff-b@glodon.com" });
 
         e.apply(example, 10, e);
         e.assign(RuntimeEntity{ e });
         e.assign(Description{ "just description" });
 
-        auto obj = TestObject::Build(e);
+        if (auto vp = e.view<Description>()) {
+            std::cout << *vp << "\n";
+        }
+
+        auto to1 = e.as<abc::examples::TestObject>();
+
+        abc::examples::TestObject to2;
+        e.project(to2);
+
+        auto obj = TestObject1::Build(e);
         if (obj.sV.empty()) {
 
         }
     }
 
+    std::vector<abc::examples::TestObject> values;
+    for (auto&& o : repo.project_views<abc::examples::TestObject>()) {
+        values.emplace_back(o);
+        o.dV = o.iV * 2.0;
+    }
+
+    auto strings = repo.values<std::string>();
+    auto it = std::any_of(strings.begin(), strings.end(), [](const auto& v) {  return v.value() == std::string{"liff-b@glodon.com"}; });
+
     auto e = repo.find(std::string{ "liff-b@glodon.com" });
-    auto e1 = repo.find_if<std::string>([](const std::string & v) { return v.find("liff.engineer")!= v.npos; });
-    
+
     std::vector<int> is{};
     std::vector<std::string> ss{};
     for (auto&& e : repo) {
@@ -168,7 +189,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    for (auto&& e : repo.iterator<double,std::string>()) {
+    for (auto&& v : repo.values<int>()) {
+        is.emplace_back(v.value());
+    }
+
+    for (auto&& e : repo.views<double,std::string>()) {
         if (!e.exist<std::string>())
             continue;
         ss.emplace_back(*e.view<std::string>());
@@ -187,33 +212,3 @@ int main(int argc, char** argv) {
     auto repo2 = serializer.FromJson(json, "demo");
     return 0;
 }
-
-/// @brief 逻辑值对象
-/// @tparam T 存储值
-/// @tparam Tag 类型标签
-template<typename T, typename Tag>
-class LogicVO {
-    T m_v{};
-public:
-    using UnderlyingType = T;
-
-    LogicVO() = default;
-
-    explicit LogicVO(T const& v) noexcept(std::is_nothrow_copy_constructible_v<T>)
-        :m_v(v) {};
-
-    template<typename U = T, typename = std::enable_if_t<!std::is_reference_v<U>, void>>
-    explicit LogicVO(T&& v) noexcept(std::is_nothrow_move_constructible_v<T>)
-        :m_v(std::move(v)) {};
-
-    T& get() noexcept { return m_v; }
-    std::remove_reference_t<T> const& get() const noexcept { return m_v; }
-
-    operator LogicVO<T&, Tag>() {
-        return LogicVO<T&, Tag>(m_v);
-    }
-
-    explicit operator T() const noexcept { return m_v; }
-};
-
-//using HasArgument = LogicVO<bool, struct HasArgumentTag>;
