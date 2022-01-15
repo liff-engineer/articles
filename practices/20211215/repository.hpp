@@ -3,6 +3,7 @@
 #include <memory>
 #include <string_view>
 #include <tuple>
+#include <algorithm>
 #include <cassert>
 
 namespace abc {
@@ -24,18 +25,18 @@ namespace abc {
         return result;
     }
 
-    struct value_array_base {
-        virtual ~value_array_base() = default;
-        virtual void remove(int id) noexcept = 0;
-        virtual std::unique_ptr<value_array_base> clone() const = 0;
+    struct indexed_array_base {
+        virtual ~indexed_array_base() = default;
+        virtual void erase(std::size_t index) noexcept = 0;
+        virtual std::unique_ptr<indexed_array_base> clone() const = 0;
     };
 
     /// @brief 内存连续且一直有效的值数组(遍历性能略差)
-    /// @tparam T 
     template<typename T>
-    struct value_array final :public value_array_base
+    struct indexed_array final :public indexed_array_base
     {
-        explicit value_array(std::size_t capacity)
+        static_assert(!std::is_same_v<T, bool>, "cann't support because std::vector<bool>");
+        explicit indexed_array(std::size_t capacity)
         {
             auto block = std::make_unique<std::vector<T>>();
             block->reserve(capacity);
@@ -45,41 +46,48 @@ namespace abc {
 
         std::size_t size() const noexcept { return m_pointers.size(); }
 
-        bool exist(int id) const noexcept {
-            if (id < 0 || id >= m_pointers.size()) return false;
-            return m_pointers[id] != nullptr;
+        bool empty() const noexcept {
+            return std::all_of(m_pointers.begin(), m_pointers.end(), [](auto v) { return v == nullptr; });
+        };
+
+        bool contains(std::size_t index) const noexcept {
+            if (index >= m_pointers.size()) return false;
+            return m_pointers[index] != nullptr;
         }
 
-        void assign(int id, T&& v) {
-            assert(id >= 0);
-            if (id + 1 >= m_pointers.size()) {
-                m_pointers.resize(id + 1, nullptr);
+        template<typename... Args>
+        void emplace(std::size_t index, Args&&... args) {
+            if (index + 1 >= m_pointers.size()) {
+                m_pointers.resize(index + 1, nullptr);
             }
 
-            auto&& pointer = m_pointers[id];
+            auto&& pointer = m_pointers[index];
             if (pointer == nullptr) {
-                pointer = alloc(std::forward<T>(v));
+                pointer = alloc(std::forward<Args>(args)...);
             }
             else {
-                *pointer = T{ std::forward<T>(v) };
+                *pointer = T{ std::forward<Args>(args)... };
             }
         }
 
-        std::add_pointer_t<T> view(int id) noexcept {
-            if (id < 0 || id >= m_pointers.size()) return nullptr;
-            return m_pointers[id];
+        std::add_pointer_t<T> at(std::size_t i) {
+            if (i < m_pointers.size()) return m_pointers.at(i);
+            return nullptr;
         }
 
-        void remove(int id) noexcept override {
-            assert(id >= 0 && id < m_pointers.size());
-            auto&& pointer = m_pointers[id];
-            if (pointer != nullptr) {
-                std::exchange(*pointer, T{});
-                pointer = nullptr;
+        std::add_pointer_t<T> operator[](std::size_t i) noexcept { return m_pointers[i]; }
+
+        void erase(std::size_t index) noexcept override {
+            if (index < m_pointers.size()) {
+                auto&& pointer = m_pointers[index];
+                if (pointer != nullptr) {
+                    std::exchange(*pointer, T{});
+                    pointer = nullptr;
+                }
             }
         }
 
-        std::unique_ptr<value_array_base> clone() const override {
+        std::unique_ptr<indexed_array_base> clone() const override {
             //clone时计算出合适的大小,避免重复内存申请
             std::size_t n = 0;
             for (std::size_t i = 0; i < m_pointers.size(); i++) {
@@ -87,7 +95,7 @@ namespace abc {
                     n++;
                 }
             }
-            auto result = std::make_unique<value_array<T>>(n);
+            auto result = std::make_unique<indexed_array<T>>(n);
 
             //指针直接设置为相同大小
             result->m_pointers.resize(m_pointers.size(), nullptr);
@@ -101,8 +109,9 @@ namespace abc {
             }
             return result;
         }
-
-        std::add_pointer_t<T> alloc(T&& v = {}) {
+    protected:
+        template<typename... Args>
+        std::add_pointer_t<T> alloc(Args&&... args) {
             auto  current = m_blocks.back().get();
             const auto capacity = current->capacity();
             const auto size = current->size();
@@ -112,20 +121,9 @@ namespace abc {
                 m_blocks.emplace_back(std::move(block));
                 current = m_blocks.back().get();
             }
-            current->emplace_back(std::forward<T>(v));
+            current->emplace_back(std::forward<Args>(args)...);
             return std::addressof(current->back());
         }
-
-        template<typename Fn>
-        void foreach(Fn&& fn) {
-            for (std::size_t i = 0; i < m_pointers.size(); i++) {
-                if (m_pointers[i] == nullptr) continue;
-                fn(i, *m_pointers[i]);
-            }
-        }
-
-        std::add_pointer_t<T> at(std::size_t i) { return m_pointers.at(i); }
-        std::add_pointer_t<T> operator[](std::size_t i) noexcept { return m_pointers[i]; }
     private:
         std::vector<std::unique_ptr<std::vector<T>>> m_blocks;
         std::vector<std::add_pointer_t<T>> m_pointers;
@@ -138,20 +136,19 @@ namespace abc {
     template<typename... Ts>
     class archetype {
         repository* m_repo{};
-        std::tuple<std::add_pointer_t<value_array<Ts>>...> m_stores{};
+        std::tuple<std::add_pointer_t<indexed_array<Ts>>...> m_stores{};
     public:
         archetype() = default;
         explicit archetype(repository& repo);
 
-        inline repository* repo() const noexcept { return m_repo; }
-
+        repository* container() const noexcept { return m_repo; }
         explicit operator bool() const noexcept { return (m_repo != nullptr); }
 
         template<typename T>
-        std::add_pointer_t<value_array<T>> store() const noexcept;
+        std::add_pointer_t<indexed_array<T>> store() const noexcept;
 
         template<typename T>
-        std::add_pointer_t<value_array<T>> store() noexcept;
+        std::add_pointer_t<indexed_array<T>> store() noexcept;
     };
 
     /// @brief 投射实现:实体和实体的值类型可以被投射为别的类型,来完成以下动作
@@ -173,26 +170,26 @@ namespace abc {
             U*& vp;
         };
 
-        template<typename E,typename T>
+        template<typename E, typename T>
         void project_to(E& e, T*& vp) {
-            vp = e.view<T>();
+            vp = e.at<T>();
         }
 
         template<typename E, typename T>
         void project_to(E& e, T& v) {
-            if (auto vp = e.view<T>()) {
+            if (auto vp = e.at<T>()) {
                 v = *vp;
             }
         }
 
         template<typename E, typename T, typename U>
         void project_to(E& e, pointer_tie<T, U>& o) {
-            o.vp = e.view<T>();
+            o.vp = e.at<T>();
         }
 
         template<typename E, typename T, typename U>
         void project_to(E& e, value_tie<T, U>& o) {
-            if (auto vp = e.view<T>()) {
+            if (auto vp = e.at<T>()) {
                 o.v = *vp;
             }
         }
@@ -215,42 +212,42 @@ namespace abc {
     template<typename... Ts>
     class entity_view {
         archetype<Ts...> m_op;
-        int         m_id{ -1 };
+        std::size_t      m_key{ std::numeric_limits<std::size_t>::max() };
     public:
         entity_view() = default;
-        entity_view(archetype<Ts...> op, int id) :m_op(std::move(op)), m_id(id) {};
-        entity_view(repository& repo, int id) :m_op(repo), m_id(id) {};
+        entity_view(archetype<Ts...> op, std::size_t key) :m_op(std::move(op)), m_key(key) {};
+        entity_view(repository& repo, std::size_t key) :m_op(repo), m_key(key) {};
 
-        inline int  id() const noexcept { return m_id; };
-        inline void bind(int id) noexcept { m_id = id; };
-        inline repository* repo() const noexcept { return m_op.repo(); }
+        inline std::size_t key() const noexcept { return m_key; };
+        inline void bind(std::size_t key) noexcept { m_key = key; };
+        inline repository* container() const noexcept { return m_op.container(); }
 
         explicit operator bool() const noexcept;
 
         template<typename T, typename... Us>
-        bool exist() const noexcept {
+        bool contains() const noexcept {
             auto h = m_op.store<T>();
-            if (h == nullptr || !h->exist(id())) return false;
+            if (h == nullptr || !h->contains(key())) return false;
             if constexpr (sizeof...(Us) > 0) {
-                return exist<Us...>();
+                return contains<Us...>();
             }
             return true;
         }
 
         template<typename T, typename... Args>
-        void assign(T&& v, Args&&... args) {
+        void emplace(T&& v, Args&&... args) {
             auto h = m_op.store<std::remove_cv_t<T>>();
-            h->assign(id(), std::forward<T>(v));
+            h->emplace(key(), std::forward<T>(v));
 
             if constexpr (sizeof...(Args) > 0) {
-                assign(std::forward<Args>(args)...);
+                emplace(std::forward<Args>(args)...);
             }
         }
 
         template<typename T, typename... Us, typename E>
         void merge(const E& e) {
             if (auto v = e.view<T>()) {
-                m_op.store<T>()->assign(id(), *v);
+                m_op.store<T>()->assign(key(), *v);
             }
             if constexpr (sizeof...(Us) > 0) {
                 merge<Us...>(e);
@@ -258,21 +255,21 @@ namespace abc {
         }
 
         template<typename T>
-        std::enable_if_t<!abc::project<T>::value, T*> view() noexcept {
-            if (auto h = m_op.store<T>()) { return h->view(id()); }
+        std::enable_if_t<!abc::project<T>::value, T*> at() noexcept {
+            if (auto h = m_op.store<T>()) { return h->at(key()); }
             return nullptr;
         }
 
         template<typename T>
-        std::enable_if_t<!abc::project<T>::value, const T*> view() const noexcept {
-            if (auto h = m_op.store<T>()) { return h->view(id()); }
+        std::enable_if_t<!abc::project<T>::value, const T*> at() const noexcept {
+            if (auto h = m_op.store<T>()) { return h->at(key()); }
             return nullptr;
         }
 
         template<typename T>
-        std::enable_if_t<abc::project<T>::value, typename abc::project<T>::type*> view() noexcept {
+        std::enable_if_t<abc::project<T>::value, typename abc::project<T>::type*> at() noexcept {
             if (auto h = m_op.store<T>()) {
-                if (auto vp = h->view(id())) {
+                if (auto vp = h->at(key())) {
                     return std::addressof(abc::project<T>::to(*vp));
                 }
             }
@@ -280,9 +277,9 @@ namespace abc {
         }
 
         template<typename T>
-        std::enable_if_t<abc::project<T>::value, const typename abc::project<T>::type*> view() const noexcept {
+        std::enable_if_t<abc::project<T>::value, const typename abc::project<T>::type*> at() const noexcept {
             if (auto h = m_op.store<T>()) {
-                if (auto vp = h->view(id())) {
+                if (auto vp = h->at(key())) {
                     return std::addressof(abc::project<T>::to(*vp));
                 }
             }
@@ -290,22 +287,22 @@ namespace abc {
         }
 
         template<typename T, typename... Us>
-        void remove() noexcept {
-            if (auto h = m_op.store<T>()) { h->remove(id()); }
+        void erase() noexcept {
+            if (auto h = m_op.store<T>()) { h->erase(key()); }
 
             if constexpr (sizeof...(Us) > 0) {
-                remove<Us...>();
+                erase<Us...>();
             }
         }
 
         template<typename Fn, typename... Us>
         auto apply(Fn&& fn, Us&&... args) noexcept {
-            return fn(std::forward<Us>(args)..., view<Ts>()...);
+            return fn(std::forward<Us>(args)..., at<Ts>()...);
         }
 
         template<typename Fn, typename... Us>
         auto apply(Fn&& fn, Us&&... args) const noexcept {
-            return fn(std::forward<Us>(args)..., view<Ts>()...);
+            return fn(std::forward<Us>(args)..., at<Ts>()...);
         }
 
         /// @brief 将包含的值投射到参数(引用、指针引用形式)上
@@ -329,19 +326,18 @@ namespace abc {
         }
 
         friend bool operator==(entity_view const& lhs, entity_view const& rhs) noexcept {
-            return (lhs.id() == rhs.id()) && (lhs.repo() == rhs.repo());
+            return (lhs.key() == rhs.key()) && (lhs.container() == rhs.container());
         }
 
         friend bool operator!=(entity_view const& lhs, entity_view const& rhs) noexcept {
-            return (lhs.id() != rhs.id()) || (lhs.repo() != rhs.repo());
+            return (lhs.key() != rhs.key()) || (lhs.container() != rhs.container());
         }
 
-        template<typename U, typename E = std::enable_if_t<std::is_constructible_v<U, repository&, int>>>
+        template<typename U, typename E = std::enable_if_t<std::is_constructible_v<U, repository&, std::size_t>>>
         operator U() const {
-            return U{ *m_op.repo(),m_id };
+            return U{ *m_op.container(),m_key };
         }
     };
-
 
     //improve
     namespace im
@@ -411,138 +407,139 @@ namespace abc {
     /// @brief 存储库
     class repository
     {
-        struct typed_value_store {
+        struct typed_value_array {
             std::string_view code;
-            std::unique_ptr<value_array_base> values;
+            std::unique_ptr<indexed_array_base> values;
         };
-        std::vector<typed_value_store> m_stores;
-        std::vector<int>  m_entitys;
+        std::vector<typed_value_array> m_arrays;
+        std::vector<std::size_t>  m_entitys;
     private:
         template<typename... Ts>
         friend  class archetype;
 
         template<typename T>
-        value_array<T>* value_array_of() const noexcept {
-            for (auto&& o : m_stores) {
+        indexed_array<T>* value_array_of() const noexcept {
+            for (auto&& o : m_arrays) {
                 if (o.code == type_code_of<T>()) {
-                    return static_cast<value_array<T>*>(o.values.get());
+                    return static_cast<indexed_array<T>*>(o.values.get());
                 }
             }
             return nullptr;
         }
 
         template<typename T>
-        value_array<T>* alloc_value_array_of() {
+        indexed_array<T>* alloc_value_array_of() {
             constexpr auto initialize_capacity = 8;
-            m_stores.emplace_back(typed_value_store{ type_code_of<T>(),
-                    std::make_unique<value_array<T>>(initialize_capacity)
+            m_arrays.emplace_back(typed_value_array{ type_code_of<T>(),
+                    std::make_unique<indexed_array<T>>(initialize_capacity)
                 });
-            return static_cast<value_array<T>*>(m_stores.back().values.get());
+            return static_cast<indexed_array<T>*>(m_arrays.back().values.get());
         }
 
-        bool next_valid(int& id) const noexcept {
-            auto n = static_cast<int>(m_entitys.size());
-            if (id >= n) return false;
-            while (id < n) {
-                id++;
-                if (valid(id)) {
-                    break;
+        bool next_valid(std::size_t& index) const noexcept {
+            auto n = m_entitys.size();
+            if (index == invalid_key) {
+                index = 0;
+                if (contains(index)) {
+                    return true;
                 }
             }
+
+            if (index >= n) return false;
+            do {
+                index++;
+            } while (index < n && !contains(index));
             return true;
         }
 
-        bool prev_valid(int& id) const noexcept {
-            if (id < 0) return false;
-            while (id >= 0) {
-                id--;
-                if (valid(id)) {
-                    break;
-                }
-            }
+        bool prev_valid(std::size_t& index) const noexcept {
+            if (index == 0) return false;
+            do
+            {
+                index--;
+            } while (index > 0 && !contains(index));
             return true;
         }
+
+        static constexpr std::size_t  empty_value = 0;
+        static constexpr std::size_t  no_empty_value = 1;
     public:
-        static constexpr int invalid_id = -1;
+        static constexpr std::size_t  invalid_key = std::numeric_limits<std::size_t>::max();
 
         repository() = default;
         repository(const repository& other)
             :m_entitys(other.m_entitys)
         {
-            m_stores.reserve(other.m_stores.size());
-            m_stores.clear();
-            for (auto& o : other.m_stores) {
-                m_stores.emplace_back(typed_value_store{ o.code,o.values->clone() });
+            m_arrays.reserve(other.m_arrays.size());
+            m_arrays.clear();
+            for (auto& o : other.m_arrays) {
+                m_arrays.emplace_back(typed_value_array{ o.code,o.values->clone() });
             }
         }
 
         repository& operator=(const repository& other) {
             if (std::addressof(other) != this) {
                 m_entitys = other.m_entitys;
-                m_stores.clear();
-                m_stores.reserve(other.m_stores.size());
-                for (auto& o : other.m_stores) {
-                    m_stores.emplace_back(typed_value_store{ o.code,o.values->clone() });
+                m_arrays.clear();
+                m_arrays.reserve(other.m_arrays.size());
+                for (auto& o : other.m_arrays) {
+                    m_arrays.emplace_back(typed_value_array{ o.code,o.values->clone() });
                 }
             }
             return *this;
         }
 
         repository(repository&& other) noexcept
-            :m_stores(std::move(other.m_stores)), m_entitys(std::move(other.m_entitys))
+            :m_arrays(std::move(other.m_arrays)), m_entitys(std::move(other.m_entitys))
         {};
+
         repository& operator=(repository&& other) noexcept {
             if (std::addressof(other) != this) {
-                m_stores = std::move(other.m_stores);
+                m_arrays = std::move(other.m_arrays);
                 m_entitys = std::move(other.m_entitys);
             }
             return *this;
         }
 
-        inline bool valid(int id) const noexcept {
-            if (id < 0 || id >= m_entitys.size()) return false;
-            return m_entitys[id] == id;
+        bool contains(std::size_t key) const noexcept {
+            if (key >= m_entitys.size()) return false;
+            return m_entitys[key] != empty_value;
         }
 
-        inline std::size_t  size() const noexcept { return m_entitys.size(); }
+        std::size_t  size() const noexcept { return m_entitys.size(); }
 
         bool   empty() const noexcept {
-            for (std::size_t i = 0; i < m_entitys.size(); i++) {
-                if (m_entitys[i] == i) return false;
-            }
-            return true;
+            return std::all_of(m_entitys.begin(), m_entitys.end(), [](auto v) { return v == empty_value; });
         }
 
         void   resize(std::size_t n) {
             auto number = m_entitys.size();
             if (n > number) {
-                m_entitys.resize(n);
-                for (std::size_t i = number; i < n; i++) {
-                    m_entitys[i] = static_cast<int>(i);
-                }
+                m_entitys.resize(n, no_empty_value);
             }
             else {
                 for (std::size_t i = n; i < number; i++) {
-                    destory(static_cast<int>(i));
+                    erase(i);
                 }
                 m_entitys.resize(n);
             }
         }
 
-        entity_view<> create() {
-            m_entitys.emplace_back(static_cast<int>(m_entitys.size()));
-            return entity_view<>{*this, static_cast<int>(m_entitys.size() - 1)};
+        entity_view<> emplace_back() {
+            m_entitys.emplace_back(no_empty_value);
+            return entity_view<>{*this, m_entitys.size() - 1};
         }
 
-        void destory(int id) noexcept {
-            if (!valid(id)) return;
-            m_entitys[id] = invalid_id;
-            for (auto&& o : m_stores) {
-                o.values->remove(id);
+        void erase(std::size_t key) noexcept {
+            if (!contains(key)) return;
+            m_entitys[key] = empty_value;
+            for (auto&& o : m_arrays) {
+                o.values->erase(key);
             }
         }
 
-        entity_view<> at(int id) noexcept { return entity_view<>{*this, id}; }
+        entity_view<> at(std::size_t key) noexcept { return entity_view<>{*this, key}; }
+        entity_view<> operator[](std::size_t key) noexcept { return entity_view<>{*this, key}; };
 
         /// @brief 针对实体视图的可迭代类型
         /// @tparam ...Ts 实体视图包含的类型列表
@@ -551,7 +548,7 @@ namespace abc {
             using value_type = typename entity_view<Ts...>;
             value_type  object;
 
-            explicit iterable_view_object(repository* repo, int id):object(*repo, id) {};
+            explicit iterable_view_object(repository* repo, std::size_t key) :object(*repo, key) {};
 
             value_type& value_reference() noexcept { return object; }
             auto value_pointer() noexcept { return std::addressof(object); }
@@ -560,15 +557,15 @@ namespace abc {
             bool operator!=(const iterable_view_object& rhs) const noexcept { !(*this == rhs); }
 
             void forward() noexcept {
-                auto id = object.id();
-                object.repo()->next_valid(id);
-                object.bind(id);
+                auto key = object.key();
+                object.container()->next_valid(key);
+                object.bind(key);
             }
 
             void backward() noexcept {
-                auto id = object.id();
-                object.repo()->prev_valid(id);
-                object.bind(id);
+                auto key = object.key();
+                object.container()->prev_valid(key);
+                object.bind(key);
             }
         };
 
@@ -577,10 +574,10 @@ namespace abc {
         /// @return 虚拟的实体视图容器
         template<typename... Ts>
         auto views() noexcept {
-            iterable_view_object<Ts...> first{ this, invalid_id };
+            iterable_view_object<Ts...> first{ this, invalid_key };
             first.forward();
             iterable_view_object<Ts...> last = first;
-            last.object.bind(static_cast<int>(m_entitys.size()));
+            last.object.bind(m_entitys.size());
             return im::container<iterable_view_object<Ts...>>{std::move(first), std::move(last)};
         };
 
@@ -598,8 +595,8 @@ namespace abc {
             typename project<T>::type entity;
             T    logic_object{};
 
-            explicit iterable_project_view_object(repository* repo, int id)
-                :entity(*repo, id) {};
+            explicit iterable_project_view_object(repository* repo, std::size_t key)
+                :entity(*repo, key) {};
 
             value_type& value_reference() noexcept { return logic_object; }
             auto value_pointer() noexcept { return std::addressof(logic_object); }
@@ -616,9 +613,9 @@ namespace abc {
 
             void forward() noexcept {
                 auto action = [&]()->bool {
-                    auto id = entity.id();
-                    auto result = entity.repo()->next_valid(id);
-                    entity.bind(id);
+                    auto key = entity.key();
+                    auto result = entity.container()->next_valid(key);
+                    entity.bind(key);
                     if (result) {
                         update();
                     }
@@ -640,9 +637,9 @@ namespace abc {
 
             void backward() noexcept {
                 auto action = [&]()->bool {
-                    auto id = entity.id();
-                    auto result = entity.repo()->prev_valid(id);
-                    entity.bind(id);
+                    auto key = entity.key();
+                    auto result = entity.container()->prev_valid(key);
+                    entity.bind(key);
                     if (result) {
                         update();
                     }
@@ -667,24 +664,24 @@ namespace abc {
         /// @return 虚拟的逻辑类型容器
         template<typename T>
         auto project_views() noexcept {
-            iterable_project_view_object<T> first{ this,invalid_id };
+            iterable_project_view_object<T> first{ this,invalid_key };
             first.forward();
 
             iterable_project_view_object<T> last = first;
-            last.entity.bind(static_cast<int>(m_entitys.size()));
+            last.entity.bind(m_entitys.size());
             return im::container<iterable_project_view_object<T>>{std::move(first), std::move(last)};
         }
 
         template<typename T>
         class item {
-            int m_key{-1};
+            std::size_t m_key{ invalid_key };
             T* m_value{};
         public:
             item() = default;
-            explicit item(int id, T* vp)
-                :m_key(id), m_value(vp) {};
+            explicit item(std::size_t key, T* vp)
+                :m_key(key), m_value(vp) {};
 
-            int key() const noexcept { return m_key; }
+            std::size_t key() const noexcept { return m_key; }
             const T& value()  const noexcept { return *m_value; };
             T& value() noexcept { return *m_value; };
         };
@@ -693,10 +690,10 @@ namespace abc {
         struct iterable_value_object
         {
             using value_type = typename item<T>;
-            value_array<T>* array;
+            indexed_array<T>* array;
             item<T>      value;
 
-            explicit iterable_value_object(value_array<T>* array_arg, std::size_t i)
+            explicit iterable_value_object(indexed_array<T>* array_arg, std::size_t i)
                 :array(array_arg), value(i, nullptr) {
                 if (array && value.key() < array->size()) {
                     value = item<T>{ value.key(),(*array)[value.key()] };
@@ -712,26 +709,26 @@ namespace abc {
             void forward() noexcept {
                 if (!array) return;
                 auto n = array->size();
-                for (auto i = value.key()+1; i < n; i++) {
+                for (auto i = value.key() + 1; i < n; i++) {
                     if ((*array)[i] != nullptr) {
-                        value = item<T>{ static_cast<int>(i),(*array)[i] };
+                        value = item<T>{ i,(*array)[i] };
                         return;
                     }
                 }
-                value = item<T>{ static_cast<int>(n),nullptr};
+                value = item<T>{ n,nullptr };
             }
 
             void backward() noexcept {
-                if (!array) return;
+                if (!array || value.key() == 0) return;
                 auto i = value.key();
                 while (i > 0) {
                     i--;
                     if ((*array)[i] != nullptr) {
-                        value = item<T>{ static_cast<int>(i),(*array)[i] };
+                        value = item<T>{ i,(*array)[i] };
                         return;
                     }
                 }
-                value = item<T>{ static_cast<int>(i),(*array)[i] };
+                value = item<T>{ i,(*array)[i] };
             }
         };
 
@@ -740,7 +737,7 @@ namespace abc {
         /// @return 虚拟的值数组容器(value_array<T>)
         template<typename T>
         auto values() noexcept {
-            auto array = this->value_array_of<T>();
+            auto array = value_array_of<T>();
             iterable_value_object<T> first{ array,0 };
             iterable_value_object<T> last{ array,array != nullptr ? array->size() : 0 };
             return im::container<iterable_value_object<T>>{std::move(first), std::move(last)};
@@ -754,7 +751,7 @@ namespace abc {
                     return entity_view<>{*this, o.key()};
                 }
             }
-            return entity_view<>{*this, invalid_id};
+            return entity_view<>{*this, invalid_key};
         }
     };
 
@@ -764,10 +761,10 @@ namespace abc {
 
     template<typename ...Ts>
     template<typename T>
-    inline std::add_pointer_t<value_array<T>> archetype<Ts...>::store() const noexcept
+    inline std::add_pointer_t<indexed_array<T>> archetype<Ts...>::store() const noexcept
     {
         if constexpr (std::disjunction_v<std::is_same<T, Ts>...>) {
-            return std::get<std::add_pointer_t<value_array<T>>>(m_stores);
+            return std::get<std::add_pointer_t<indexed_array<T>>>(m_stores);
         }
         else {
             return m_repo->value_array_of<T>();
@@ -776,14 +773,14 @@ namespace abc {
 
     template<typename ...Ts>
     template<typename T>
-    inline std::add_pointer_t<value_array<T>> archetype<Ts...>::store() noexcept
+    inline std::add_pointer_t<indexed_array<T>> archetype<Ts...>::store() noexcept
     {
         if constexpr (std::disjunction_v<std::is_same<T, Ts>...>) {
-            if (auto result = std::get<std::add_pointer_t<value_array<T>>>(m_stores)) {
+            if (auto result = std::get<std::add_pointer_t<indexed_array<T>>>(m_stores)) {
                 return result;
             }
             auto result = m_repo->alloc_value_array_of<T>();
-            std::get<std::add_pointer_t<value_array<T>>>(m_stores) = result;
+            std::get<std::add_pointer_t<indexed_array<T>>>(m_stores) = result;
             return result;
         }
         else {
@@ -797,7 +794,7 @@ namespace abc {
     template<typename ...Ts>
     inline entity_view<Ts...>::operator bool() const noexcept
     {
-        return (m_op.repo() != nullptr) && (m_op.repo()->valid(m_id));
+        return (m_op.container() != nullptr) && (m_op.container()->contains(m_key));
     }
 
     namespace examples

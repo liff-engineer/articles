@@ -34,7 +34,7 @@ struct json_serializer final :public json_serialzier_base {
         :code(std::move(arg)){};
 
     void to(nlohmann::json& j, const entity_view<>& e) override {
-        if (auto v = e.view<T>()) {
+        if (auto v = e.at<T>()) {
             j[code] = *v;
         }
     }
@@ -43,7 +43,7 @@ struct json_serializer final :public json_serialzier_base {
         if (!j.contains(code)) return;
         T v{};
         j.at(code).get_to(v);
-        e.assign(std::move(v));
+        e.emplace(std::move(v));
     }
 };
 
@@ -63,7 +63,7 @@ struct RepositorySerializer {
             for (auto& o : serializers) {
                 o.second->to(obj, e);
             }
-            entitys[std::to_string(e.id())] = std::move(obj);
+            entitys[std::to_string(e.key())] = std::move(obj);
         }
 
         nlohmann::json result;
@@ -141,18 +141,18 @@ struct TestObject1 {
 int main(int argc, char** argv) {
     repository repo{};
     {
-        auto e = repo.create();
-        e.assign(1024,1.414, std::string{ "liff.engineer@gmail.com" });
+        auto e = repo.emplace_back();
+        e.emplace(1024,1.414, std::string{ "liff.engineer@gmail.com" });
     }
     {
-        entity_view<double, std::string> e = repo.create();
-        e.assign(456,3.1415926, std::string{ "liff-b@glodon.com" });
+        entity_view<double, std::string> e = repo.emplace_back();
+        e.emplace(456,3.1415926, std::string{ "liff-b@glodon.com" });
 
         e.apply(example, 10, e);
-        e.assign(RuntimeEntity{ e });
-        e.assign(Description{ "just description" });
+        e.emplace(RuntimeEntity{ e });
+        e.emplace(Description{ "just description" });
 
-        if (auto vp = e.view<Description>()) {
+        if (auto vp = e.at<Description>()) {
             std::cout << *vp << "\n";
         }
 
@@ -181,10 +181,10 @@ int main(int argc, char** argv) {
     std::vector<int> is{};
     std::vector<std::string> ss{};
     for (auto&& e : repo) {
-        if (auto v = e.view<int>()) {
+        if (auto v = e.at<int>()) {
             is.emplace_back(*v);
         }
-        if (auto v = e.view<std::string>()) {
+        if (auto v = e.at<std::string>()) {
             ss.emplace_back(*v);
         }
     }
@@ -194,9 +194,9 @@ int main(int argc, char** argv) {
     }
 
     for (auto&& e : repo.views<double,std::string>()) {
-        if (!e.exist<std::string>())
+        if (!e.contains<std::string>())
             continue;
-        ss.emplace_back(*e.view<std::string>());
+        ss.emplace_back(*e.at<std::string>());
     }
 
     repository repo1 = repo;
