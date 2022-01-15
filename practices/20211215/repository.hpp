@@ -172,24 +172,24 @@ namespace abc {
 
         template<typename E, typename T>
         void project_to(E& e, T*& vp) {
-            vp = e.at<T>();
+            vp = e.view<T>();
         }
 
         template<typename E, typename T>
         void project_to(E& e, T& v) {
-            if (auto vp = e.at<T>()) {
+            if (auto vp = e.view<T>()) {
                 v = *vp;
             }
         }
 
         template<typename E, typename T, typename U>
         void project_to(E& e, pointer_tie<T, U>& o) {
-            o.vp = e.at<T>();
+            o.vp = e.view<T>();
         }
 
         template<typename E, typename T, typename U>
         void project_to(E& e, value_tie<T, U>& o) {
-            if (auto vp = e.at<T>()) {
+            if (auto vp = e.view<T>()) {
                 o.v = *vp;
             }
         }
@@ -255,19 +255,27 @@ namespace abc {
         }
 
         template<typename T>
-        std::enable_if_t<!abc::project<T>::value, T*> at() noexcept {
+        std::enable_if_t<!abc::project<T>::value, T*> view() noexcept {
             if (auto h = m_op.store<T>()) { return h->at(key()); }
             return nullptr;
         }
 
         template<typename T>
-        std::enable_if_t<!abc::project<T>::value, const T*> at() const noexcept {
+        std::enable_if_t<!abc::project<T>::value, const T*> view() const noexcept {
             if (auto h = m_op.store<T>()) { return h->at(key()); }
             return nullptr;
         }
 
         template<typename T>
-        std::enable_if_t<abc::project<T>::value, typename abc::project<T>::type*> at() noexcept {
+        std::enable_if_t<!abc::project<T>::value, T>  value_or(const T& v) const noexcept {
+            if (auto vp = view<T>()) {
+                return *vp;
+            }
+            return v;
+        }
+
+        template<typename T>
+        std::enable_if_t<abc::project<T>::value, typename abc::project<T>::type*> view() noexcept {
             if (auto h = m_op.store<T>()) {
                 if (auto vp = h->at(key())) {
                     return std::addressof(abc::project<T>::to(*vp));
@@ -277,13 +285,21 @@ namespace abc {
         }
 
         template<typename T>
-        std::enable_if_t<abc::project<T>::value, const typename abc::project<T>::type*> at() const noexcept {
+        std::enable_if_t<abc::project<T>::value, const typename abc::project<T>::type*> view() const noexcept {
             if (auto h = m_op.store<T>()) {
                 if (auto vp = h->at(key())) {
                     return std::addressof(abc::project<T>::to(*vp));
                 }
             }
             return nullptr;
+        }
+
+        template<typename T,typename U = abc::project<T>::type >
+        std::enable_if_t<abc::project<T>::value, U> value_or(const U& v) const noexcept {
+            if (auto vp = view<T>()) {
+                return *vp;
+            }
+            return v;
         }
 
         template<typename T, typename... Us>
@@ -297,12 +313,12 @@ namespace abc {
 
         template<typename Fn, typename... Us>
         auto apply(Fn&& fn, Us&&... args) noexcept {
-            return fn(std::forward<Us>(args)..., at<Ts>()...);
+            return fn(std::forward<Us>(args)..., view<Ts>()...);
         }
 
         template<typename Fn, typename... Us>
         auto apply(Fn&& fn, Us&&... args) const noexcept {
-            return fn(std::forward<Us>(args)..., at<Ts>()...);
+            return fn(std::forward<Us>(args)..., view<Ts>()...);
         }
 
         /// @brief 将包含的值投射到参数(引用、指针引用形式)上

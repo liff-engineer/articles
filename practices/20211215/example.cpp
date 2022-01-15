@@ -34,7 +34,7 @@ struct json_serializer final :public json_serialzier_base {
         :code(std::move(arg)){};
 
     void to(nlohmann::json& j, const entity_view<>& e) override {
-        if (auto v = e.at<T>()) {
+        if (auto v = e.view<T>()) {
             j[code] = *v;
         }
     }
@@ -146,15 +146,17 @@ int main(int argc, char** argv) {
     }
     {
         entity_view<double, std::string> e = repo.emplace_back();
-        e.emplace(456,3.1415926, std::string{ "liff-b@glodon.com" });
+        e.emplace(456,3.1415926, std::string{ "liff.cpplang@gmail.com" });
 
         e.apply(example, 10, e);
         e.emplace(RuntimeEntity{ e });
         e.emplace(Description{ "just description" });
 
-        if (auto vp = e.at<Description>()) {
+        if (auto vp = e.view<Description>()) {
             std::cout << *vp << "\n";
         }
+
+        auto desc = e.value_or<Description>(std::string{});
 
         auto to1 = e.as<abc::examples::TestObject>();
 
@@ -174,19 +176,20 @@ int main(int argc, char** argv) {
     }
 
     auto strings = repo.values<std::string>();
-    auto it = std::any_of(strings.begin(), strings.end(), [](const auto& v) {  return v.value() == std::string{"liff-b@glodon.com"}; });
+    auto it = std::any_of(strings.begin(), strings.end(), [](const auto& v) {  return v.value() == std::string{"liff.cpplang@gmail.com"}; });
 
-    auto e = repo.find(std::string{ "liff-b@glodon.com" });
+    auto e = repo.find(std::string{ "liff.cpplang@gmail.com" });
 
     std::vector<int> is{};
     std::vector<std::string> ss{};
     for (auto&& e : repo) {
-        if (auto v = e.at<int>()) {
+        if (auto v = e.view<int>()) {
             is.emplace_back(*v);
         }
-        if (auto v = e.at<std::string>()) {
+        if (auto v = e.view<std::string>()) {
             ss.emplace_back(*v);
         }
+        auto string = e.value_or(std::string{});
     }
 
     for (auto&& v : repo.values<int>()) {
@@ -196,7 +199,7 @@ int main(int argc, char** argv) {
     for (auto&& e : repo.views<double,std::string>()) {
         if (!e.contains<std::string>())
             continue;
-        ss.emplace_back(*e.at<std::string>());
+        ss.emplace_back(*e.view<std::string>());
     }
 
     repository repo1 = repo;
