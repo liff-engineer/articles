@@ -52,7 +52,7 @@ struct ArAdapter<MyObject>
         ar.write("kVs", obj.kVs);
     }
 
-    static bool read(IArReader& ar, MyObject& obj) {
+    static bool read(const IArReader& ar, MyObject& obj) {
         ar.read("bV", obj.bV);
         ar.read("iV", obj.iV);
         ar.read("dV", obj.dV);
@@ -83,7 +83,7 @@ struct ArAdapter<MyComplexObject>
         ar.write("oV", obj.oV);
         ar.write("dVs", obj.dVs);
     }
-    static bool read(IArReader& ar, MyComplexObject& obj) {
+    static bool read(const IArReader& ar, MyComplexObject& obj) {
         ar.read("oV", obj.oV);
         ar.read("dVs", obj.dVs);
         return true;

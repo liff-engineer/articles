@@ -5,7 +5,7 @@
 namespace
 {
     static const auto text_archive_format = "xml";
-#if 0
+#if 1
     static const auto Node = "Node";
     static const auto KeyAttr = "Key";
     static const auto ValueAttr = "Value";
@@ -20,7 +20,6 @@ class XmlArReader :public IArReader
 {
 public:
     pugi::xml_node node;
-    mutable std::shared_ptr<XmlArReader> m_reader;
 public:
     explicit XmlArReader(const pugi::xml_node n)
         :node(n) {};
@@ -29,20 +28,6 @@ public:
     std::size_t size() const noexcept override {
         return std::distance(node.begin(), node.end());
     }
-
-    //void visit(std::function<void(IArReader&)> op) const  {
-    //    for (auto& n : node.children()) {
-    //        XmlArReader reader{ n };
-    //        op(reader);
-    //    }
-    //}
-
-    //void visit(std::function<void(const char*, IArReader&)> op) const  {
-    //    for (auto& n : node.children()) {
-    //        XmlArReader reader{ n };
-    //        op(n.attribute(KeyAttr).as_string(), reader);
-    //    }
-    //}
 
     void visit(IVisitor& op) const override {
         for (auto& n : node.children()) {
@@ -64,9 +49,18 @@ public:
         }
         return false;
     }
+
     bool read(int64_t& v) const  override {
         if (auto attr = node.attribute(ValueAttr)) {
             v = attr.as_llong();
+            return true;
+        }
+        return false;
+    }
+
+    bool read(uint64_t& v) const  override {
+        if (auto attr = node.attribute(ValueAttr)) {
+            v = attr.as_ullong();
             return true;
         }
         return false;
@@ -117,6 +111,16 @@ public:
         return false;
     }
 
+    bool read(const char* member, uint64_t& v) const override {
+        if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
+            if (auto attr = n.attribute(ValueAttr)) {
+                v = attr.as_ullong();
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool read(const char* member, double& v) const override {
         if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
             if (auto attr = n.attribute(ValueAttr)) {
@@ -148,38 +152,24 @@ public:
         }
         return false;
     }
-
-    bool verify(const char* member, const char* v) const override {
+protected:
+    bool       try_read(const char* member, IReader& reader) const override {
         if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
-            if (auto attr = n.attribute(ValueAttr)) {
-                return std::strcmp(v, attr.as_string()) == 0;
-            }
+            XmlArReader ar{ n };
+            return reader.read(ar);
         }
         return false;
     }
-protected:
-    IArReader* reader(const char* member) const override {
-        if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
-            if (m_reader == nullptr) {
-                m_reader = std::make_shared<XmlArReader>(n);
-            }
-            else
-            {
-                m_reader->node = n;
-            }
-            return m_reader.get();
-        }
-        return nullptr;
+    
+    bool       try_read(IReader& reader) const override {
+        return reader.read(*this);
     }
 };
-
 
 class XmlArchive :public  IArchive
 {
     std::shared_ptr<pugi::xml_document> doc;
     pugi::xml_node     node;
-    std::unique_ptr<XmlArchive> m_writer;
-    mutable std::shared_ptr<XmlArReader> m_reader;
 public:
     XmlArchive()
         :doc(std::make_shared<pugi::xml_document>())
@@ -232,6 +222,9 @@ public:
     void write(int64_t v) override {
         node.append_child(Node).append_attribute(ValueAttr).set_value(v);
     }
+    void write(uint64_t v) override {
+        node.append_child(Node).append_attribute(ValueAttr).set_value(v);
+    }
 
     void write(double v) override {
         node.append_child(Node).append_attribute(ValueAttr).set_value(v);
@@ -269,6 +262,10 @@ public:
         writeImpl(member, v);
     }
 
+    void write(const char* member, uint64_t v) override {
+        writeImpl(member, v);
+    }
+
     void write(const char* member, double v) override {
         writeImpl(member, v);
     }
@@ -285,38 +282,11 @@ public:
         writeImpl(member, v);
     }
 
-    IArchive* writer() override {
-        if (m_writer == nullptr) {
-            m_writer = std::make_unique<XmlArchive>(doc, node);
-        }
-        else
-        {
-            m_writer->node = node.append_child(Node);
-        }
-        return m_writer.get();
-    }
-
-    void write(const char* member, IArchive* v)  override {
-        if (v == m_writer.get()) {
-            m_writer->node.append_attribute(KeyAttr).set_value(member);
-        }
-    }
-
-    void write(IArchive* v) override {}
-
-
     //查询接口
     std::size_t size() const noexcept override {
         return XmlArReader{ node }.size();
     }
 
-    //void visit(std::function<void(IArReader&)> op) const noexcept {
-    //    return XmlArReader{ node }.visit(op);
-    //}
-
-    //void visit(std::function<void(const char*, IArReader&)> op) const noexcept {
-    //    return XmlArReader{ node }.visit(op);
-    //}
     void visit(IVisitor& op) const override {
         return XmlArReader{ node }.visit(op);
     }
@@ -328,6 +298,9 @@ public:
         return XmlArReader{ node }.read(v);
     }
     bool read(int64_t& v) const  override {
+        return XmlArReader{ node }.read(v);
+    }
+    bool read(uint64_t& v) const  override {
         return XmlArReader{ node }.read(v);
     }
 
@@ -355,6 +328,10 @@ public:
         return XmlArReader{ node }.read(member, v);
     }
 
+    bool read(const char* member, uint64_t& v) const override {
+        return XmlArReader{ node }.read(member, v);
+    }
+
     bool read(const char* member, double& v) const override {
         return XmlArReader{ node }.read(member, v);
     }
@@ -370,24 +347,28 @@ public:
     bool read(const char* member) const override {
         return XmlArReader{ node }.read(member);
     }
-
-    bool verify(const char* member, const char* v) const override {
-        return XmlArReader{ node }.verify(member, v);
+protected:
+    bool       try_read(const char* member, IReader& reader) const override {
+        if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
+            XmlArReader ar{ n };
+            return reader.read(ar);
+        }
+        return false;
     }
 
-protected:
-    IArReader* reader(const char* member) const override {
-        if (auto n = node.find_child_by_attribute(KeyAttr, member)) {
-            if (m_reader == nullptr) {
-                m_reader = std::make_shared<XmlArReader>(n);
-            }
-            else
-            {
-                m_reader->node = n;
-            }
-            return m_reader.get();
-        }
-        return nullptr;
+    bool       try_read(IReader& reader) const override {
+        return reader.read(*this);
+    }
+
+    void try_write(const char* member, IWriter& writer) override {
+        XmlArchive ar{ doc,node };
+        ar.node.append_attribute(KeyAttr).set_value(member);
+        writer.write(ar);
+    }
+
+    void try_write(IWriter& writer) override {
+        XmlArchive ar{ doc,node };
+        writer.write(ar);
     }
 };
 

@@ -19,10 +19,13 @@
 #include <map>
 #include "meta.h"
 
-/// @brief 类型T的存档实现
+/// @brief 复杂类型T的存档实现
 template<typename T, typename E = void>
 struct ArAdapter;
 
+/// @brief 基本类型T的存档实现(直接映射为存档支持的基本类型)
+template<typename T, typename E = void>
+struct ArBasicAdapter :std::false_type {};
 
 class IArReader {
 public:
@@ -32,21 +35,36 @@ public:
     };
 
     template<typename Fn>
-    struct Visitor final:public IVisitor {
+    struct Visitor final :public IVisitor {
         Fn fn;
         explicit Visitor(Fn&& fn) :fn(std::move(fn)) {};
         void accept(IArReader& ar) override { fn(ar); }
     };
 
     struct IKVVisitor {
-        virtual void accept(const char*,IArReader&) = 0;
+        virtual void accept(const char*, IArReader&) = 0;
     };
 
     template<typename Fn>
-    struct KVVisitor final:public IKVVisitor {
+    struct KVVisitor final :public IKVVisitor {
         Fn fn;
         explicit KVVisitor(Fn&& fn) :fn(std::move(fn)) {};
         void accept(const char* key, IArReader& ar) override { fn(key, ar); }
+    };
+
+    struct IReader {
+        virtual bool read(const IArReader&) = 0;
+    };
+
+    /// @brief 使用该实现来读取复杂类型对象信息
+    template<typename T>
+    struct Reader final :public IReader
+    {
+        T* obj{};
+        explicit Reader(T& o) :obj(std::addressof(o)) {};
+        bool read(const IArReader& ar) override {
+            return ArAdapter<T>::read(ar, *obj);
+        }
     };
 public:
     virtual ~IArReader() = default;
@@ -54,17 +72,17 @@ public:
     //查询接口
     virtual std::size_t size() const noexcept = 0;
 
-    virtual void visit(IVisitor& op) const  = 0;
-    virtual void visit(IKVVisitor& op) const  = 0;
+    virtual void visit(IVisitor& op) const = 0;
+    virtual void visit(IKVVisitor& op) const = 0;
 
     template<typename Fn>
-    std::enable_if_t<std::is_invocable_v<Fn, IArReader&>,void> visit(Fn&& fn) const  {
-        Visitor<Fn> op{std::forward<Fn>(fn)};
+    std::enable_if_t<std::is_invocable_v<Fn, IArReader&>, void> visit(Fn&& fn) const {
+        Visitor<Fn> op{ std::forward<Fn>(fn) };
         visit(op);
     }
 
     template<typename Fn>
-    std::enable_if_t<std::is_invocable_v<Fn, const char*, IArReader&>, void> visit(Fn&& fn) const  {
+    std::enable_if_t<std::is_invocable_v<Fn, const char*, IArReader&>, void> visit(Fn&& fn) const {
         KVVisitor<Fn> op{ std::forward<Fn>(fn) };
         visit(op);
     }
@@ -72,14 +90,7 @@ public:
     //数组读取,基本类型
     virtual bool read(bool& v) const = 0;
     virtual bool read(int64_t& v) const = 0;
-    inline  bool read(int& v) const {
-        int64_t o{};
-        if (read(o)) {
-            v = (int)(o);
-            return true;
-        }
-        return false;
-    }
+    virtual bool read(uint64_t& v) const = 0;
     virtual bool read(double& v) const = 0;
     virtual bool read(std::string& v) const = 0;
     virtual bool read(std::vector<char>& v) const = 0;
@@ -88,41 +99,45 @@ public:
     //字典读取,基本类型
     virtual bool read(const char* member, bool& v) const = 0;
     virtual bool read(const char* member, int64_t& v) const = 0;
-    inline  bool read(const char* member, int& v) const {
-        int64_t o{};
-        if (read(member, o)) {
-            v = (int)(o);
-            return true;
-        }
-        return false;
-    }
+    virtual bool read(const char* member, uint64_t& v) const = 0;
     virtual bool read(const char* member, double& v) const = 0;
     virtual bool read(const char* member, std::string& v) const = 0;
     virtual bool read(const char* member, std::vector<char>& v) const = 0;
     virtual bool read(const char* member) const = 0;
 
-    virtual bool verify(const char* member, const char* v) const = 0;
+    inline bool verify(const char* member, const char* v) const {
+        std::string result{};
+        if (read(member, result)) {
+            return result == v;
+        }
+        return false;
+    }
 
     template<typename T>
     bool  read(const char* member, T& v) const {
-        if (auto op = reader(member)) {
-            return ArAdapter<T>::read(*op, v);
+        if constexpr (ArBasicAdapter<T>::value) {
+            return ArBasicAdapter<T>::read(*this, member, v);
         }
-        return false;
+        else {
+            return try_read(member, Reader<T>{ v });
+        }
     }
 
     template<typename T>
     bool  read(T& v) const {
-        if (auto op = reader()) {
-            return ArAdapter<T>::read(*op, v);
+        if constexpr (ArBasicAdapter<T>::value) {
+            return ArBasicAdapter<T>::read(*this, v);
         }
-        return false;
+        else {
+            return try_read(Reader<T>{ v });
+        }
     }
 protected:
-    virtual IArReader* reader(const char* member) const = 0;
+    virtual bool       try_read(const char* member, IReader& reader) const = 0;
+    virtual bool       try_read(IReader& reader) const = 0;
 };
 
-class IArchive:public IArReader
+class IArchive :public IArReader
 {
 public:
     static void    Unregister(const char* format);
@@ -150,6 +165,7 @@ public:
     //数组写入,基本类型
     virtual void write(bool v) = 0;
     virtual void write(int64_t v) = 0;
+    virtual void write(uint64_t v) = 0;
     virtual void write(double v) = 0;
     virtual void write(const char* v) = 0;
     virtual void write(const std::vector<char>& v) = 0;
@@ -159,11 +175,11 @@ public:
     //字典写入,基本类型
     virtual void write(const char* member, bool v) = 0;
     virtual void write(const char* member, int64_t v) = 0;
+    virtual void write(const char* member, uint64_t v) = 0;
     virtual void write(const char* member, double v) = 0;
     virtual void write(const char* member, const char* v) = 0;
     virtual void write(const char* member, const std::vector<char>& v) = 0;
     virtual void write(const char* member, nullptr_t v) = 0;
-
 
     //扩展基本类型
     inline void write(const std::string& v) {
@@ -173,27 +189,29 @@ public:
         write(member, v.c_str());
     }
 
-    inline void write(const char* member, int v) {
-        write(member, static_cast<int64_t>(v));
-    }
-
-    inline void write(int v) {
-        write(static_cast<int64_t>(v));
-    }
-
     //复合类型处理
     template<typename T>
     void  write(const char* member, const T& v) {
-        auto op = writer();
-        ArAdapter<T>::write(*op, v);
-        write(member, op);
+        // 如果类型T可以按照内建类型操作,则无需申请writer
+        if constexpr (ArBasicAdapter<T>::value) {
+            ArBasicAdapter<T>::write(*this, member, v);
+        }
+        else
+        {
+            try_write(member, Writer<T>{v});
+        }
     }
 
     template<typename T>
     void  write(const T& v) {
-        auto op = writer();
-        ArAdapter<T>::write(*op, v);
-        write(op);
+        // 如果类型T可以按照内建类型操作,则无需申请writer
+        if constexpr (ArBasicAdapter<T>::value) {
+            ArBasicAdapter<T>::write(*this, v);
+        }
+        else
+        {
+            try_write(Writer<T>{v});
+        }
     }
 
     //STL中提供的复合类型,当然也可以通过类型偏特化机制处理
@@ -202,10 +220,21 @@ public:
         write(member, v ? (*v.get()) : nullptr);
     }
 protected:
-    //复合类型写入支持(1. 获取可用Writer 2. 写入数据  3. 作为子项写入)
-    virtual IArchive* writer() = 0;
-    virtual void write(const char* member, IArchive* v) = 0;
-    virtual void write(IArchive* v) = 0;
+    struct IWriter {
+        virtual void write(IArchive& ar) = 0;
+    };
+
+    template<typename T>
+    struct Writer final :public IWriter {
+        const T* obj;
+        explicit Writer(const T& o) :obj(std::addressof(o)) {};
+        void write(IArchive& ar) override {
+            ArAdapter<T>::write(ar, *obj);
+        }
+    };
+
+    virtual void try_write(const char* member, IWriter& writer) = 0;
+    virtual void try_write(IWriter& writer) = 0;
 };
 
 /// @brief 存档实现注册用
@@ -213,8 +242,8 @@ struct ArchiveRegister
 {
     std::string code;
 
-    ArchiveRegister(const char* format, std::unique_ptr<IArchive>(*ctor)()):code(format){
-        IArchive::Register(format,ctor);
+    ArchiveRegister(const char* format, std::unique_ptr<IArchive>(*ctor)()) :code(format) {
+        IArchive::Register(format, ctor);
     }
     ~ArchiveRegister() {
         IArchive::Unregister(code.c_str());
@@ -236,7 +265,7 @@ public:
 
     explicit Archive(const char* format);
 
-    Archive(const Archive& other){
+    Archive(const Archive& other) {
         if (other) {
             m_impl = other->clone();
         }
@@ -244,7 +273,7 @@ public:
 
     Archive(Archive&& other) noexcept = default;
 
-    Archive& operator=(const Archive& other){
+    Archive& operator=(const Archive& other) {
         if (this != std::addressof(other)) {
             if (other) {
                 m_impl = other->clone();
@@ -297,8 +326,72 @@ public:
 };
 
 template<typename T>
+struct ArBasicAdapter<T, std::enable_if_t<std::is_signed_v<T>>> :std::true_type
+{
+    static int64_t as(const T& v) { return static_cast<int64_t>(v); }
+
+    static bool read(const IArReader& ar, const char* member, T& v) {
+        int64_t rv{};
+        if (ar.read(member, rv)) {
+            v = static_cast<T>(rv);
+            return true;
+        }
+        return false;
+    }
+
+    static bool read(const IArReader& ar, T& v) {
+        int64_t rv{};
+        if (ar.read(rv)) {
+            v = static_cast<T>(rv);
+            return true;
+        }
+        return false;
+    }
+
+    static void write(IArchive& ar, const char* member, const T& v) {
+        ar.write(member, as(v));
+    }
+
+    static void write(IArchive& ar, const T& v) {
+        ar.write(as(v));
+    }
+};
+
+template<typename T>
+struct ArBasicAdapter<T, std::enable_if_t<std::is_unsigned_v<T>>> :std::true_type
+{
+    static uint64_t as(const T& v) { return static_cast<uint64_t>(v); }
+
+    static bool read(const IArReader& ar, const char* member, T& v) {
+        uint64_t rv{};
+        if (ar.read(member, rv)) {
+            v = static_cast<T>(rv);
+            return true;
+        }
+        return false;
+    }
+
+    static bool read(const IArReader& ar, T& v) {
+        uint64_t rv{};
+        if (ar.read(rv)) {
+            v = static_cast<T>(rv);
+            return true;
+        }
+        return false;
+    }
+
+    static void write(IArchive& ar, const char* member, const T& v) {
+        ar.write(member, as(v));
+    }
+
+    static void write(IArchive& ar, const T& v) {
+        ar.write(as(v));
+    }
+};
+
+template<typename T>
 struct ArAdapter<T, std::enable_if_t<Meta<T>::value>> {
-    
+
     template<typename U, typename R>
     static void write(IArchive& ar, const T& obj, Member<U, R> m) {
         //出现这种情况,说明开发者是抄写的代码,使用&Class::member时,忘记修改Class了
@@ -307,7 +400,7 @@ struct ArAdapter<T, std::enable_if_t<Meta<T>::value>> {
     }
 
     template<typename U, typename R>
-    static void read(IArReader& ar, T& obj, Member<U, R> m) {
+    static void read(const IArReader& ar, T& obj, Member<U, R> m) {
         //出现这种情况,说明开发者是抄写的代码,使用&Class::member时,忘记修改Class了
         static_assert(std::is_same_v<T, U>, "member declare invalid,check your code.");
         ar.read(m.name, (obj).*(m.mp));
@@ -321,7 +414,7 @@ struct ArAdapter<T, std::enable_if_t<Meta<T>::value>> {
     }
 
     template<typename U>
-    static void read(IArReader& ar, T& obj, U m) {
+    static void read(const IArReader& ar, T& obj, U m) {
         //正常情况下都走上面的member<U,R>分支,一旦出现这个,说明
         //类型T的meta生成函数(默认为make_meta)返回了错误的内容
         static_assert(false, "meta info invalid,check your code.");
@@ -337,7 +430,7 @@ struct ArAdapter<T, std::enable_if_t<Meta<T>::value>> {
         );
     }
 
-    static bool read(IArReader& ar, T& v) {
+    static bool read(const IArReader& ar, T& v) {
         static auto meta = Meta<T>::Make();
         if (ar.verify("__class_id__", meta.first)) {
             std::apply([&](auto&& ... args)
@@ -354,13 +447,14 @@ struct ArAdapter<T, std::enable_if_t<Meta<T>::value>> {
 
 template<typename... Ts>
 struct ArAdapter<std::vector<Ts...>> {
+
     static void write(IArchive& ar, const std::vector<Ts...>& v) {
         for (auto& o : v) {
             ar.write(o);
         }
     }
 
-    static bool read(IArReader& ar, std::vector<Ts...>& v) {
+    static bool read(const IArReader& ar, std::vector<Ts...>& v) {
         v.reserve(v.size() + ar.size());
         ar.visit([&](IArReader& o) {
             v.resize(v.size() + 1);
@@ -379,8 +473,8 @@ struct ArAdapter<std::map<K, Ts...>, std::enable_if_t<std::is_integral_v<K>>> {
         }
     }
 
-    static bool read(IArReader& ar, std::map<K, Ts...>& items) {
-        ar.visit([&](const char* key, IArReader& o) {
+    static bool read(const IArReader& ar, std::map<K, Ts...>& items) {
+        ar.visit([&](const char* key, const IArReader& o) {
             if constexpr (std::is_unsigned_v<K>) {
                 K k = (K)std::stoull(key);
                 o.read(items[k]);
@@ -404,8 +498,8 @@ struct ArAdapter<std::map<std::string, Ts...>> {
         }
     }
 
-    static bool read(IArReader& ar, std::map<std::string, Ts...>& items) {
-        ar.visit([&](const char* key, IArReader& o) {
+    static bool read(const IArReader& ar, std::map<std::string, Ts...>& items) {
+        ar.visit([&](const char* key, const IArReader& o) {
             o.read(items[key]);
             });
         return true;

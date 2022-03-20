@@ -16,18 +16,18 @@ constexpr Member<T, R> MakeMember(const char* name, R T::* mp) {
 }
 
 /// @brief 类型T的元信息头部,可以根据具体类型定制
-//template<typename T,typename E = void>
-//struct MetaHeader {
-//    const char* name;
-//
-//    constexpr const char* ClassName() {
-//        return name;
-//    }
-//
-//    static constexpr MetaHeader Header(const char* name) noexcept {
-//        return MetaHeader{ name };
-//    }
-//};
+template<typename T,typename E = void>
+struct MetaHeader {
+    const char* name;
+
+    constexpr const char* ClassName() {
+        return name;
+    }
+
+    static constexpr MetaHeader Header(const char* name) noexcept {
+        return MetaHeader{ name };
+    }
+};
 
 /// @brief 注意偏特化该类,一定要派生自std::true_type
 template<typename T, typename E = void>

@@ -133,8 +133,8 @@ int main() {
     obj1.dVs = { 1.1,2.2,3.3,4.4 };
 
     auto ar = Archive("xml");
-    ar->write("MyComplexObject", obj1);
-    ar->write("MyObject", obj);
+    ar.write("MyComplexObject", obj1);
+    ar.write("MyObject", obj);
     auto result = ar->to_string();
     ar->save("archive.xml");
 

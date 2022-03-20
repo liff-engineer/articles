@@ -13,7 +13,6 @@ class JsonArReader :public IArReader
 {
 public:
     const  nlohmann::json* j;
-    mutable std::shared_ptr<JsonArReader> m_reader;
 public:
     explicit JsonArReader(const nlohmann::json* json)
         :j(json) {};
@@ -22,20 +21,6 @@ public:
     std::size_t size() const noexcept override {
         return j->size();
     }
-
-    //void visit(std::function<void(IArReader&)> op) const noexcept override {
-    //    for (auto&& o : *j) {
-    //        JsonArReader reader{ std::addressof(o)};
-    //        op(reader);
-    //    }
-    //}
-    //
-    //void visit(std::function<void(const char*, IArReader&)> op) const noexcept override {
-    //    for (auto& [key, val] : j->items()) {
-    //        JsonArReader reader{ std::addressof(val) };
-    //        op(key.c_str(),reader);
-    //    }
-    //}
 
     void visit(IVisitor& op) const override {
         for (auto&& o : *j) {
@@ -62,6 +47,14 @@ public:
 
     bool read(int64_t& v) const override {
         if (j->is_number_integer()) {
+            j->get_to(v);
+            return true;
+        }
+        return false;
+    }
+
+    bool read(uint64_t& v) const override {
+        if (j->is_number_unsigned()) {
             j->get_to(v);
             return true;
         }
@@ -115,6 +108,16 @@ public:
         return false;
     }
 
+    bool read(const char* member, uint64_t& v) const override {
+        if (auto it = j->find(member); it != j->end()) {
+            if (it->is_number_unsigned()) {
+                it->get_to(v);
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool read(const char* member, double& v) const override {
         if (auto it = j->find(member); it != j->end()) {
             if (it->is_number()) {
@@ -146,32 +149,16 @@ public:
         }
         return false;
     }
-
-    bool verify(const char* member, const char* v) const override {
+protected:
+    bool       try_read(const char* member, IReader& reader) const override {
         if (auto it = j->find(member); it != j->end()) {
-            if (it->is_string()) {
-                return v == it->get<std::string>();
-            }
+            JsonArReader ar{ std::addressof(*it) };
+            return reader.read(ar);
         }
         return false;
     }
-protected:
-    IArReader* reader(const char* member) const override {
-        if (auto it = j->find(member); it != j->end()) {
-            auto addr = std::addressof(*it);
-            if (m_reader == nullptr) {
-                m_reader = std::make_shared<JsonArReader>(addr);
-            }
-            else
-            {
-                m_reader->j = addr;
-            }
-            return m_reader.get();
-        }
-        else
-        {
-            return nullptr;
-        }
+    bool       try_read(IReader& reader) const override {
+        return reader.read(*this);
     }
 };
 
@@ -179,10 +166,7 @@ class JsonArchive :public IArchive
 {
 protected:
     nlohmann::json j;
-    std::unique_ptr<JsonArchive>  m_writer;
-    mutable std::shared_ptr<JsonArReader> m_reader;
 public:
-
     std::unique_ptr<IArchive> clone() const override {
         JsonArchive result{};
         result.j = j;
@@ -213,13 +197,6 @@ public:
         return j.size();
     }
 
-    //void visit(std::function<void(IArReader&)> op) const noexcept override {
-    //    JsonArReader{ &j }.visit(op);
-    //}
-
-    //void visit(std::function<void(const char*, IArReader&)> op) const noexcept override {
-    //    JsonArReader{ &j }.visit(op);
-    //}
     void visit(IVisitor& op) const override {
         JsonArReader{ &j }.visit(op);
     }
@@ -234,6 +211,9 @@ public:
         j.push_back(v);
     }
 
+    void write(uint64_t v) override {
+        j.push_back(v);
+    }
     void write(double v) override {
         j.push_back(v);
     }
@@ -256,6 +236,10 @@ public:
     }
 
     bool read(int64_t& v) const override {
+        return JsonArReader{ &j }.read(v);
+    }
+
+    bool read(uint64_t& v) const override {
         return JsonArReader{ &j }.read(v);
     }
 
@@ -284,6 +268,10 @@ public:
         j[member] = v;
     }
 
+    void write(const char* member, uint64_t v) override {
+        j[member] = v;
+    }
+
     void write(const char* member, double v) override {
         j[member] = v;
     }
@@ -308,6 +296,10 @@ public:
         return JsonArReader{ &j }.read(member, v);
     }
 
+    bool read(const char* member, uint64_t& v) const override {
+        return JsonArReader{ &j }.read(member, v);
+    }
+
     bool read(const char* member, double& v) const override {
         return JsonArReader{ &j }.read(member, v);
     }
@@ -324,46 +316,28 @@ public:
     bool read(const char* member) const override {
         return JsonArReader{ &j }.read(member);
     }
-
-    bool verify(const char* member, const char* v) const override {
-        return JsonArReader{ &j }.verify(member,v);
-    }
-
-    IArchive* writer() override {
-        if (m_writer == nullptr) {
-            m_writer = std::make_unique<JsonArchive>();
-        }
-        return m_writer.get();
-    }
-
-    void write(const char* member, IArchive* v)  override {
-        if (v == m_writer.get()) {
-            j[member] = std::move(m_writer->j);
-        }
-    }
-
-    void write(IArchive* v) override {
-        if (v == m_writer.get()) {
-            j.emplace_back(std::move(m_writer->j));
-        }
-    }
 protected:
-    IArReader* reader(const char* member) const override {
+    bool       try_read(const char* member, IReader& reader) const override {
         if (auto it = j.find(member); it != j.end()) {
-            auto addr = std::addressof(*it);
-            if (m_reader == nullptr) {
-                m_reader = std::make_shared<JsonArReader>(addr);
-            }
-            else
-            {
-                m_reader->j = addr;
-            }
-            return m_reader.get();
+            JsonArReader ar{ std::addressof(*it) };
+            return reader.read(ar);
         }
-        else
-        {
-            return nullptr;
-        }
+        return false;
+    }
+    bool       try_read(IReader& reader) const override {
+        return reader.read(*this);
+    }
+
+    void try_write(const char* member, IWriter& writer) override {
+        JsonArchive ar{};
+        writer.write(ar);
+        j[member] = std::move(ar.j);
+    }
+
+    void try_write(IWriter& writer) override {
+        JsonArchive ar{};
+        writer.write(ar);
+        j.emplace_back(std::move(ar.j));
     }
 };
 
@@ -457,13 +431,6 @@ public:
         auto buffer = JsonBinaryFormat<T>::write(j);
         ofs.write((const char*)(buffer.data()), buffer.size());
         return true;
-    }
-
-    IArchive* writer() override {
-        if (m_writer == nullptr) {
-            m_writer = std::make_unique<BinaryJsonArchive<T>>();
-        }
-        return m_writer.get();
     }
 };
 
