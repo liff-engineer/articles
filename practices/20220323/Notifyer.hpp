@@ -54,6 +54,14 @@ namespace abc
             return *this;
         }
 
+        SubscribeStub& operator+=(SubscribeStub&& other) noexcept {
+            for (auto&& op : other.m_actions) {
+                m_actions.emplace_back(std::move(op));
+            }
+            other.m_actions.clear();
+            return *this;
+        }
+
         void release() {
             for (auto& op : m_actions) {
                 if (op) { op(); }
