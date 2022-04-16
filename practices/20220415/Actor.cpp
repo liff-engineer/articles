@@ -1,36 +1,62 @@
 ﻿#include "Actor.hpp"
-#include <chrono>
+#include <sstream>
+#include <Windows.h>
 
 namespace abc
 {
-    //利用栈追踪通过broker的消息流
-    thread_local const Broker* gCurrentBroker = nullptr;
+    static Broker::Reporter gBrokerReporter = [](const Broker::Action& event) {
+        //记录初始化后第一次调用的时间点,用来计算ns级差值,来统计性能
+        static auto mark = std::chrono::high_resolution_clock::now();
+        std::stringstream oss;
+        oss << "abc::broker::trace|";
+        oss << event.source.id;
+        oss << '|' << "broker(" << (std::uintptr_t)(event.source.broker) << ')';
+        oss << '|' << event.actor.code << '(' << event.actor.address << ')';
+        oss << '|' << event.type;
+        oss << '|' << event.message;
+        oss << '|' << std::chrono::duration_cast<std::chrono::milliseconds>(event.timepoint.time_since_epoch()).count();
+        oss << '|' << std::chrono::duration_cast<std::chrono::nanoseconds>(event.timepoint - mark).count();
+        oss << '\n';
 
-    //需要追踪并记录如下信息
-    //> id:用来追踪整个调用链路
-    //> broker:当前由哪个broker管理
-    //> actor:当前由哪个actor处理
-    //> actor description:actor的描述
-    //> timestamp in milliseconds:当前时间戳
-    //> enter or leave:是进入还是退出,用来形成调用链
-    //> time lost in nanoseconds:leave时耗费的时间
+        OutputDebugStringA(oss.str().c_str());
+    };
 
-    void example() {
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        auto s = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        auto start = std::chrono::high_resolution_clock::now();
-        auto finish = std::chrono::high_resolution_clock::now();
+    Broker::Tracer::Tracer(Action::Header source, Action::Actor actor, const char* code)
+    {
+        log = { source,0,actor,code,std::chrono::high_resolution_clock::now() };
+        if (gBrokerReporter) {
+            gBrokerReporter(log);
+        }
+    }
 
-        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(finish - start).count();
+    Broker::Tracer::~Tracer() noexcept
+    {
+        log.type = 1;
+        log.timepoint = std::chrono::high_resolution_clock::now();
+        try {
+            if (gBrokerReporter) {
+                gBrokerReporter(log);
+            }
+        }
+        catch (...) {};
     }
 
     Broker::Broker() = default;
-    void Broker::handle(IPayload& payload, const char* code)
-    {
-        gCurrentBroker = this;
 
+    Broker::Reporter Broker::RegisterReporter(Reporter&& handler)
+    {
+        return std::exchange(gBrokerReporter, handler);
+    }
+
+    void Broker::handle(Action::Header source, IPayload& payload, const char* code)
+    {
+        static unsigned id = 0;
+        if (source.broker == nullptr) {
+            source.broker = this;
+            source.id = id++;
+        }
+
+        Tracer log{ source,{(std::uintptr_t)this,description.c_str()},code };
         m_concurrentCount++;
         try {
             std::size_t i = 0;
@@ -38,7 +64,7 @@ namespace abc
                 auto&& o = m_stubs[i++];
                 if (!o.accept(code)) continue;
                 if (auto&& h = o.handler.lock()) {
-                    h->handle(payload, code);
+                    h->handle(source, payload, code);
                 }
             }
             m_concurrentCount--;
@@ -47,10 +73,5 @@ namespace abc
             m_concurrentCount--;
             throw;
         }
-    }
-
-    void Registry::clear()
-    {
-        std::swap(m_entries, std::vector<Entry>{});
     }
 }

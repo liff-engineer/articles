@@ -1,4 +1,16 @@
-﻿#pragma once
+﻿///  用来支持复杂界面交互的支持库
+///  >>> 复杂界面交互可以拆分为:界面、流程、业务三大部分
+///  >>> 1. 界面负责输入与显示;
+///  >>> 2. 业务负责完成具体业务逻辑;
+///  >>> 3. 流程负责统筹界面、业务,以表达用户行为/场景逻辑.
+///  
+///  这里提供如下支持:
+///  > 以Actor为核心抽象,由输入消息触发执行;
+///  > 通过Broker建立Actor之间消息流动关系;
+///  > Broker支持发布订阅、请求回复、桥接三种模式,并可跟踪运行全过程;
+///  > 提供Actor抽象工厂支持,用来存储不同类型的Actor(界面、业务其构造方式不同) 
+/// 
+#pragma once
 #include <type_traits>
 #include <typeinfo>
 #include <cstring>
@@ -8,10 +20,35 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <chrono>
 
 namespace abc
 {
     class Broker final {
+    public:
+        struct Action {
+            struct Header {
+                int     id; //追踪用,由单一源头触发的系列动作其id均一致
+                const Broker* broker;//触发时的消息中间人
+            } source;
+            int    type;//0:enter;1:leave
+            struct Actor {
+                std::uintptr_t address;//Actor地址,用来区分不同Actor实例
+                const char* code;//记录Actor类型信息
+            } actor;
+            const char* message;//记录消息类型信息
+            std::chrono::high_resolution_clock::time_point timepoint;//时间戳
+        };
+
+        using Reporter = std::function<void(const Action&)>;
+    private:
+        class Tracer {
+            Action log;
+        public:
+            Tracer(Action::Header source, Action::Actor actor, const char* code);
+            ~Tracer() noexcept;
+        };
+
         struct IPayload {
             virtual ~IPayload() = default;
         };
@@ -25,7 +62,7 @@ namespace abc
                 :arg(std::addressof(arg_)), result(std::addressof(result_)) {};
 
             template<typename T>
-            void handle(T& obj) { return obj.Reply(*arg, *result); }
+            void handle(T& obj) { return obj.reply(*arg, *result); }
         };
 
         template<typename R>
@@ -34,7 +71,7 @@ namespace abc
             explicit Payload(R& result_) :result(std::addressof(result_)) {};
 
             template<typename T>
-            void handle(T& obj) { return obj.Reply(*result); }
+            void handle(T& obj) { return obj.reply(*result); }
         };
 
         template<typename E>
@@ -43,11 +80,11 @@ namespace abc
             explicit Payload(const E& arg_) :arg(std::addressof(arg_)) {};
 
             template<typename T>
-            void handle(T& obj) { return obj.On(*arg); }
+            void handle(T& obj) { return obj.on(*arg); }
         };
 
         struct IMessageHandler {
-            virtual void handle(IPayload& payload, const char* code) const = 0;
+            virtual void handle(Action::Header source, IPayload& payload, const char* code) const = 0;
         };
 
         template<typename T, typename E, typename R>
@@ -55,8 +92,9 @@ namespace abc
             T* obj;
             explicit Handler(T& o) :obj(std::addressof(o)) {};
 
-            void handle(IPayload& payload, const char* code) const override {
+            void handle(Action::Header source, IPayload& payload, const char* code) const override {
                 static const char* codeReq = typeid(Payload<E, R>).name();
+                Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
                 if (std::strcmp(code, codeReq) == 0) {
                     if (auto op = dynamic_cast<Payload<E, R>*>(&payload)) {
                         op->handle(*obj);
@@ -73,7 +111,10 @@ namespace abc
             T* obj;
             explicit HubHandler(T& o) :obj(std::addressof(o)) {};
 
-            void handle(IPayload& payload, const char* code) const override { obj->handle(payload, code);}
+            void handle(Action::Header source, IPayload& payload, const char* code) const override {
+                Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
+                obj->handle(source, payload, code);
+            }
         };
 
         struct HandlerStub {
@@ -87,9 +128,10 @@ namespace abc
         std::vector<HandlerStub> m_stubs;
         unsigned m_concurrentCount{};
     public:
+        std::string description;
         Broker();
 
-        static std::function<void(void*, const char*)>& logger();
+        static Reporter RegisterReporter(Reporter&& handler);
 
         template<typename T>
         void publish(const T& msg) { handle(Payload<T, void>{msg}); }
@@ -115,9 +157,9 @@ namespace abc
     private:
         template<typename T, typename R>
         void handle(Payload<T, R>& payload) {
-            handle(payload, typeid(Payload<T, R>).name());
+            handle(Action::Header{}, payload, typeid(Payload<T, R>).name());
         }
-        void handle(IPayload& payload, const char* code);
+        void handle(Action::Header source, IPayload& payload, const char* code);
     private:
         template<typename E, typename R, typename T>
         std::shared_ptr<IMessageHandler> addHandler(T& obj) {
@@ -134,113 +176,29 @@ namespace abc
         }
     };
 
-    class Registry {
-        struct IEntry {
-            virtual ~IEntry() = default;
-            virtual void* address() noexcept = 0;
-        };
-
-        template<typename T>
-        struct Instance final :public IEntry {
-            T obj;
-            explicit Instance(T&& o) :obj(std::move(o)) {};
-
-            void* address() noexcept final override { return std::addressof(obj); }
-        };
-
-        struct Entry {
-            const char* code;
-            std::shared_ptr<IEntry> instance;
-
-            template<typename T>
-            inline bool is() const noexcept { return std::strcmp(code, typeid(T).name()) == 0; }
-        };
-
-        std::vector<Entry> m_entries;
-    public:
-        template<typename T, typename... Args>
-        T* emplace(Args&&... args) {
-            if (auto vp = find<T>()) {
-                *vp = std::move(T{ std::forward<Args>(args)... });
-                return vp;
-            }
-            auto h = std::make_shared<Instance<T>>(T{ std::forward<Args>(args)... });
-            auto result = std::addressof(h->obj);
-            m_entries.emplace_back(Entry{ typeid(T).name(),h });
-            return result;
-        }
-
-        template<typename T>
-        bool erase(T* pointer) noexcept {
-            for (auto&& o : m_entries) {
-                if (o.instance && o.instance->address() == pointer) {
-                    o.instance.reset();
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        template<typename T>
-        bool erase() noexcept {
-            for (auto&& o : m_entries) {
-                if (o.is<T>()) {
-                    o.instance.reset();
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        template<typename T>
-        std::enable_if_t<std::is_pointer<T>::value, T> at() const noexcept {
-            return find<std::remove_pointer_t<T>>();
-        }
-
-        template<typename T>
-        std::enable_if_t<!std::is_pointer<T>::value, T> at() const {
-            if (auto vp = find<T>()) {
-                return *vp;
-            }
-            throw std::invalid_argument("cann't find require type value in registry!");
-        }
-
-        void clear();
-    protected:
-        template<typename T>
-        T* find() const noexcept {
-            for (auto&& o : m_entries) {
-                if (o.is<T>() && o.instance) {
-                    if (auto vp = dynamic_cast<Instance<T>*>(o.instance.get())) {
-                        return std::addressof(vp->obj);
-                    }
-                }
-            }
-            return nullptr;
-        }
-    };
-
-    template<typename I, typename K, typename... Ts>
+    template<typename R, typename K, typename... Ts>
     class Factory {
-        std::unordered_map<K, std::function<std::unique_ptr<I>(Ts&&...)>> m_factories;
+        std::unordered_map<K, std::function<R(Ts...)>> m_factories;
     public:
+        template<typename T>
+        bool contains(const T& code) const noexcept {
+            return m_factories.find(code) != m_factories.end();
+        }
+
         template<typename... Args>
-        std::unique_ptr<I> make(const K& code, Args&&... args) {
-            if (auto it = m_factories.find(code); it != m_factories.end()) {
-                return it->second->make(std::forward<Args>(args)...);
-            }
-            return nullptr;
+        R make(const K& code, Args&&... args) const {
+            return m_factories.at(code)(std::forward<Args>(args)...);
         }
 
         template<typename Fn>
-        void registerMaker(K code, Fn&& fn) { m_factories[std::move(code)] = std::move(fn); }
+        void emplace(K code, Fn&& fn) { m_factories[std::move(code)] = std::move(fn); }
     };
 
     class IActor {
     public:
         virtual ~IActor() = default;
-        virtual void launch(Registry& registry, Broker& broker) = 0;
+        virtual void launch(Broker& broker) = 0;
     };
 
-    class ActorFactory :public Factory<IActor, std::string> {};
+    class ActorFactory :public Factory<std::unique_ptr<IActor>, std::string> {};
 }
