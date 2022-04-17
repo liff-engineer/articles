@@ -26,11 +26,33 @@ namespace abc
 {
     class Broker final {
     public:
+        std::string description;
+        Broker();
+
+        template<typename T>
+        void publish(const T& msg) { handle(Payload<T, void>{msg}); }
+
+        template<typename T, typename R>
+        void request(const T& msg, R& result) { handle(Payload<T, R>{msg, result}); }
+
+        template<typename R>
+        void request(R& result) { handle(Payload<void, R>{result}); }
+
+
+        template<typename E, typename T>
+        auto subscribe(T& obj) { return addHandler<E, void>(obj); }
+
+        template<typename E, typename R, typename T>
+        auto bind(T& obj) { return addHandler<E, R>(obj); }
+
+        template<typename R, typename T>
+        auto bind(T& obj) { return addHandler<void, R>(obj); }
+
+        template<typename T>
+        auto connect(T& obj) { return addHubHandler(obj); }
+    public:
         struct Action {
-            struct Header {
-                int     id; //追踪用,由单一源头触发的系列动作其id均一致
-                const Broker* broker;//触发时的消息中间人
-            } source;
+            const Broker* broker;//触发时的消息中间人
             int    type;//0:enter;1:leave
             struct Actor {
                 std::uintptr_t address;//Actor地址,用来区分不同Actor实例
@@ -41,11 +63,13 @@ namespace abc
         };
 
         using Reporter = std::function<void(const Action&)>;
+
+        static Reporter RegisterReporter(Reporter&& handler);
     private:
         class Tracer {
             Action log;
         public:
-            Tracer(Action::Header source, Action::Actor actor, const char* code);
+            Tracer(const Broker* source, Action::Actor actor, const char* code);
             ~Tracer() noexcept;
         };
 
@@ -84,7 +108,7 @@ namespace abc
         };
 
         struct IMessageHandler {
-            virtual void handle(Action::Header source, IPayload& payload, const char* code) const = 0;
+            virtual void handle(const Broker* source, IPayload& payload, const char* code) const = 0;
         };
 
         template<typename T, typename E, typename R>
@@ -92,7 +116,7 @@ namespace abc
             T* obj;
             explicit Handler(T& o) :obj(std::addressof(o)) {};
 
-            void handle(Action::Header source, IPayload& payload, const char* code) const override {
+            void handle(const Broker* source, IPayload& payload, const char* code) const override {
                 static const char* codeReq = typeid(Payload<E, R>).name();
                 Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
                 if (std::strcmp(code, codeReq) == 0) {
@@ -111,7 +135,7 @@ namespace abc
             T* obj;
             explicit HubHandler(T& o) :obj(std::addressof(o)) {};
 
-            void handle(Action::Header source, IPayload& payload, const char* code) const override {
+            void handle(const Broker* source, IPayload& payload, const char* code) const override {
                 Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
                 obj->handle(source, payload, code);
             }
@@ -127,40 +151,13 @@ namespace abc
 
         std::vector<HandlerStub> m_stubs;
         unsigned m_concurrentCount{};
-    public:
-        std::string description;
-        Broker();
-
-        static Reporter RegisterReporter(Reporter&& handler);
-
-        template<typename T>
-        void publish(const T& msg) { handle(Payload<T, void>{msg}); }
-
-        template<typename T, typename R>
-        void request(const T& msg, R& result) { handle(Payload<T, R>{msg, result}); }
-
-        template<typename R>
-        void request(R& result) { handle(Payload<void, R>{result}); }
-
-
-        template<typename E, typename T>
-        auto subscribe(T& obj) { return addHandler<E, void>(obj); }
-
-        template<typename E, typename R, typename T>
-        auto bind(T& obj) { return addHandler<E, R>(obj); }
-
-        template<typename R, typename T>
-        auto bind(T& obj) { return addHandler<void, R>(obj); }
-
-        template<typename T>
-        auto connect(T& obj) { return addHubHandler(obj); }
     private:
         template<typename T, typename R>
         void handle(Payload<T, R>& payload) {
-            handle(Action::Header{}, payload, typeid(Payload<T, R>).name());
+            handle(this, payload, typeid(Payload<T, R>).name());
         }
-        void handle(Action::Header source, IPayload& payload, const char* code);
-    private:
+        void handle(const Broker* source, IPayload& payload, const char* code);
+
         template<typename E, typename R, typename T>
         std::shared_ptr<IMessageHandler> addHandler(T& obj) {
             auto handler = std::make_shared<Handler<T, E, R>>(obj);
