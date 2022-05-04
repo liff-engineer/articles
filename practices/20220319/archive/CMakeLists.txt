@@ -1,4 +1,4 @@
-add_library(archive)
+add_library(archive SHARED)
 
 target_sources(archive
     PRIVATE archive.h archive.cpp  meta.h
