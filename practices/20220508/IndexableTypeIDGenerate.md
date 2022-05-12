@@ -9,7 +9,46 @@
 ## 使用场景示例
 
 
+## 实现方式
 
+假设使用`typeid`来获取类型的代号,定义为`TypeCode`,那么可以以`std::vector<TypeCode>`来存储类型代号,并以其在`vector`中的位置作为类型`ID`:
+
+- 当某类型的`TypeCode`存在于`vector`中时,返回索引值;
+- 当某类型的`TypeCode`在`vector`中不存在,则追加到`vector`之后,再返回索引值.
+
+定义类似如下:
+
+```C++
+using TypeCode = std::string;
+
+class TypeRegistry{
+public:
+    int GetIndex(const TypeCode& code);
+private:
+    std::vector<TypeCode> m_codes;
+};
+```
+
+局部静态变量只会进行一次初始化,可以利用这种特性:
+
+- 第一次进入函数,局部静态变量通过`TypeRegistry::GetIndex`完成初始化;
+- 之后再进入函数,则不会再初始化,而是使用初始化之后的值.
+
+考虑到这会带来全局影响,`TypeRegistry`应当实现成单例,从而使得对应函数可以写:
+
+```C++
+class TypeRegistry{
+public:
+    static TypeRegistry* Get();
+};
+
+template<typename T>
+void UserCode(){
+    static const auto index = TypeRegistry::Get()->GetIndex(typeid(T).name());
+}
+```
+
+这样`UserCode`在第一次调用时会初始化,相对慢一点,后续不会再有初始化动作,而且也获取了相对紧凑的类型`ID`. 
 
 
 
