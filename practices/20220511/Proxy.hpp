@@ -32,6 +32,10 @@ namespace abc
             if (!m_obj) return false;
             return IsValidImpl();
         }
+
+        explicit operator T() const noexcept{
+            return m_obj;
+        }
     protected:
         using Super = Proxy<T>;
         virtual bool IsValidImpl() const noexcept {
