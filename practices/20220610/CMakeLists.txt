@@ -11,3 +11,9 @@ add_executable(Factory)
 target_sources(Factory
     PRIVATE factory.h factory.cpp
 )
+
+add_executable(Registry)
+
+target_sources(Registry
+    PRIVATE Registry.hpp Registry.cpp
+)

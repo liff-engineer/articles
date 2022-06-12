@@ -1,4 +1,5 @@
 ﻿#include "Registry.hpp"
+#include "factory.h"
 #include <iostream>
 #include <string>
 
@@ -22,36 +23,21 @@ public:
 };
 
 template<typename T>
-struct abc::FactoryInject<T, IReporter> {
+struct abc::IFactoryInject<T, IReporter> {
     using type = ReporterImpl<T>;
 };
 
-
-class ReporterFactory : public abc::Factory<IReporter>
+class ReporterFactory : public abc::Factory<IReporter,std::string>
 {
 public:
-    using Super::Super;
+    using Super::Register;//使用基类的Register
 
-    template<typename O, typename T = void>
+    /// @brief 注册IReporter实现
+    template<typename T, typename Arg = void>
     bool Register() {
-        return Super::Register<O, T>(O::Code());
-    }
-
-    template<typename O, typename T = void,typename K = std::string>
-    bool Register(K key) {
-        return Super::Register<O, T>(key);
+        return Super::Register<T, Arg>(T::Code());
     }
 };
-
-template<>
-struct abc::Maker<abc::Registry, IReporter> {
-    template<typename... Args>
-    std::unique_ptr<IReporter> Make(abc::Registry* registry, Args... args) {
-        auto factory = abc::Get<ReporterFactory>(registry);
-        return factory->Make(std::forward<Args>(args)...);
-    }
-};
-
 
 template<typename T>
 class Reporter :public IReporter {
@@ -86,6 +72,11 @@ struct DoubleReporter
     }
 };
 
+//指定IReporter的工厂为ReporterFactory
+template<>
+struct abc::RegistryFactoryInject<IReporter> {
+    using type = ReporterFactory;
+};
 
 void TestRegistryFactory() {
     {//注册类实例
@@ -109,33 +100,6 @@ int main() {
         TestRegistryFactory();
     }
 
-    ReporterFactory factory{};
-    factory.Register<Reporter<int>,int>();
-    factory.Register<Reporter<double>,double>();
-    factory.Register<IntReporter, int>("Int");
-    factory.Register<DoubleReporter, double>("Double");
-
-    factory.SetDefaultArgument("int", 1024);
-    factory.SetDefaultArgument("double", 3.1415926);
-
-    std::vector<std::unique_ptr<IReporter>> results;
-    results.emplace_back(factory.Make("int"));
-    results.emplace_back(factory.Make("double"));
-    results.emplace_back(factory.Make("int", 256));
-    results.emplace_back(factory.Make("double", 1.171));
-
-    results.emplace_back(factory.Make("Int", 128));
-    results.emplace_back(factory.Make("Double", 1.414));
-
-    //以下构造会失败
-    results.emplace_back(factory.Make("Int"));
-    results.emplace_back(factory.Make("Double"));
-    for (auto&& o : results) {
-        if (o) {
-            o->Run();
-        }
-    }
-
     abc::Registry registry{};
     registry.emplace<IntReporter>(10);
     registry.emplace<DoubleReporter>(3.14);
@@ -151,4 +115,16 @@ int main() {
     auto vp3 = registry.get<IReporter>();
     vp3->Run();
     return 0;
+}
+
+std::size_t abc::Registry::Impl::GetIndex(const char* code)
+{
+    static std::vector<std::string> codes;
+    for (std::size_t i = 0; i < codes.size(); i++) {
+        if (codes[i] == code) {
+            return i;
+        }
+    }
+    codes.emplace_back(code);
+    return codes.size() - 1;
 }
