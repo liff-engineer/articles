@@ -219,6 +219,8 @@ TestActor::Launch
 Invalid
 ```
 
+实现源码参见[https://github.com/liff-engineer/articles/tree/master/patterns/20220703](https://github.com/liff-engineer/articles/tree/master/patterns/20220703).
+
 ## 注意事项
 
 ### 注意区分运行环境
