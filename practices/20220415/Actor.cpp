@@ -10,7 +10,7 @@ namespace abc
         std::stringstream oss;
         oss << "abc::broker::trace|"<< "broker(" << (std::uintptr_t)(event.broker) << ')';
         oss << '|' << event.type;
-        oss << '|' << event.actor.code << '(' << event.actor.address << ')';
+        oss << '|' << event.handlerCode << '(' << event.handler << ')';
         oss << '|' << event.message;
         oss << '|' << std::chrono::duration_cast<std::chrono::milliseconds>(event.timepoint.time_since_epoch()).count();
         oss << '|' << std::chrono::duration_cast<std::chrono::nanoseconds>(event.timepoint - mark).count();
@@ -29,8 +29,7 @@ namespace abc
 
     void Broker::handle(const Broker* source, IPayload& payload, const char* code)
     {
-        Tracer log{ source,{(std::uintptr_t)this,description.c_str()},code };
-        m_concurrentCount++;
+        Tracer log{ source,this,code };
         try {
             std::size_t i = 0;
             while (i < m_stubs.size()) {
@@ -40,17 +39,15 @@ namespace abc
                     h->handle(source, payload, code);
                 }
             }
-            m_concurrentCount--;
         }
         catch (...) {
-            m_concurrentCount--;
             throw;
         }
     }
 
-    Broker::Tracer::Tracer(const Broker* source, Action::Actor actor, const char* code)
+    Broker::Tracer::Tracer(const Broker* source, std::uintptr_t address, const char* handlerCode, const char* code)
     {
-        log = { source,0,actor,code,std::chrono::high_resolution_clock::now() };
+        log = { source,0,address,handlerCode,code,std::chrono::high_resolution_clock::now() };
         if (gBrokerReporter) {
             gBrokerReporter(log);
         }

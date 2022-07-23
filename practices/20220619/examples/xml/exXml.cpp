@@ -74,7 +74,26 @@ void test_archive_clone(const Archive& other)
     }
 }
 
+template <typename T, T V>
+constexpr const char* InferEnumName()
+{
+    return __FUNCSIG__;
+}
+
+enum class Fruit
+{
+    APPLE = 0,
+    PEAR = 1,
+    MACINTOSH = PEAR+APPLE
+};
+
+constexpr auto v1 = InferEnumName<Fruit, Fruit::APPLE>();
+constexpr auto v2 = InferEnumName<Fruit, Fruit::MACINTOSH>();
+
 int main() {
+
+    std::string s1 = InferEnumName<Fruit,Fruit::APPLE>();
+    std::string s2 = InferEnumName<Fruit, Fruit::MACINTOSH>();
 
     MyObject obj{};
     obj.bV = false;

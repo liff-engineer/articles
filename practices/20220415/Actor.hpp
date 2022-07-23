@@ -54,10 +54,8 @@ namespace abc
         struct Action {
             const Broker* broker;//触发时的消息中间人
             int    type;//0:enter;1:leave
-            struct Actor {
-                std::uintptr_t address;//Actor地址,用来区分不同Actor实例
-                const char* code;//记录Actor类型信息
-            } actor;
+            std::uintptr_t handler;//handler地址,用来区分不同handler实例
+            const char* handlerCode;//记录handler类型信息
             const char* message;//记录消息类型信息
             std::chrono::high_resolution_clock::time_point timepoint;//时间戳
         };
@@ -69,7 +67,11 @@ namespace abc
         class Tracer {
             Action log;
         public:
-            Tracer(const Broker* source, Action::Actor actor, const char* code);
+            Tracer(const Broker* source, std::uintptr_t address,const char* handlerCode, const char* code);
+            template<typename T>
+            Tracer(const Broker* source, const T* obj, const char* code)
+                :Tracer(source, (std::uintptr_t)obj, typeid(T).name() , code) {};
+
             ~Tracer() noexcept;
         };
 
@@ -118,7 +120,7 @@ namespace abc
 
             void handle(const Broker* source, IPayload& payload, const char* code) const override {
                 static const char* codeReq = typeid(Payload<E, R>).name();
-                Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
+                Tracer log{ source,obj,code };
                 if (std::strcmp(code, codeReq) == 0) {
                     if (auto op = dynamic_cast<Payload<E, R>*>(&payload)) {
                         op->handle(*obj);
@@ -136,7 +138,7 @@ namespace abc
             explicit HubHandler(T& o) :obj(std::addressof(o)) {};
 
             void handle(const Broker* source, IPayload& payload, const char* code) const override {
-                Tracer log{ source,{(std::uintptr_t)obj,typeid(T).name()},code };
+                Tracer log{ source,obj,code };
                 obj->handle(source, payload, code);
             }
         };
@@ -150,7 +152,6 @@ namespace abc
         };
 
         std::vector<HandlerStub> m_stubs;
-        unsigned m_concurrentCount{};
     private:
         template<typename T, typename R>
         void handle(Payload<T, R>& payload) {
