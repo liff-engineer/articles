@@ -21,6 +21,12 @@ public:
         }
         return service;
     }
+
+    template<typename I, typename T>
+    I* bind(T* v) {
+        static_assert(std::is_base_of_v<I, T>, "std::is_base_of_v<I, T>");
+        return m_channels.emplace<I>(v);
+    }
 protected:
     AnyVector m_channels;
 };

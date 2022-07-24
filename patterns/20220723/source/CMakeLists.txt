@@ -48,14 +48,14 @@ target_include_directories(${TARGET_NAME}
         "${SOURCE_DIR}"
 )
 
-# target_precompile_headers(${TARGET_NAME}
-#     PRIVATE 
-#         [["IOContext/InputService.hpp"]]
-#         [["qevent.h"]]
-#         <string>
-#         <QObject>
-#         <QtWidgets/QGraphicsView>
-# )
+target_precompile_headers(${TARGET_NAME}
+    PRIVATE 
+        [["qevent.h"]]
+        <functional>
+        <QObject>
+        <QtWidgets/QGraphicsView>
+        <QtCore/qvariant.h>
+)
 
 set_target_properties(${TARGET_NAME} PROPERTIES
     AUTOMOC ON
