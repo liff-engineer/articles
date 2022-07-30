@@ -10,8 +10,8 @@ public:
     Aggregator& operator=(Aggregator&& other) noexcept = default;
 protected:
     template<typename T, typename... Args>
-    T* install(Args&&... args) {
-        return install_impl<T>(std::forward<Args>(args)...);
+    T* emplace(Args&&... args) {
+        return emplace_impl<T>(std::forward<Args>(args)...);
     }
 
     template<typename T>
@@ -57,7 +57,7 @@ protected:
     }
 private:
     template<typename T, typename U>
-    T* install_impl(U&& arg) {
+    T* emplace_impl(U&& arg) {
         using H = typename Holder<T, std::remove_cv_t<std::remove_reference_t<U>>>::type;
         auto obj = std::make_unique<Value<T, H>>(std::forward<U>(arg));
         auto result = obj->get();
@@ -66,22 +66,19 @@ private:
     }
 
     template<typename T, typename... Args>
-    T* install_impl(Args&&... args) {
+    T* emplace_impl(Args&&... args) {
         auto obj = std::make_unique<Value<T>>(std::forward<Args>(args)...);
         auto result = obj->get();
         m_entrys.emplace_back(std::move(obj));
         return result;
     }
 private:
-    class IEntry {
-    public:
-        virtual ~IEntry() = default;
+    struct IEntry {
         virtual const char* code() const noexcept = 0;
     };
 
     template<typename I>
-    class Entry :public IEntry {
-    public:
+    struct Entry :public IEntry {
         virtual I* get() noexcept = 0;
         const char* code() const noexcept final { return typeid(I).name(); }
     };
@@ -151,7 +148,7 @@ public:
 
 class ServiceAggregator :private Aggregator {
 public:
-    using Aggregator::install;
+    using Aggregator::emplace;
     using Aggregator::erase;
     using Aggregator::visit;
 };
@@ -171,11 +168,11 @@ int main() {
     Aggregator other{ std::move(obj) };
 
     ServiceAggregator hub{};
-    auto v = hub.install<std::string>("liff.engineer@gmail.com");
-    hub.install<std::string>(std::make_unique<std::string>("unique_ptr"));
-    hub.install<std::string>(std::make_shared<std::string>("shared_ptr"));
-    hub.install<std::string>(v);
-    hub.install<ITask>(std::make_unique<Task>());
+    auto v = hub.emplace<std::string>("liff.engineer@gmail.com");
+    hub.emplace<std::string>(std::make_unique<std::string>("unique_ptr"));
+    hub.emplace<std::string>(std::make_shared<std::string>("shared_ptr"));
+    hub.emplace<std::string>(v);
+    hub.emplace<ITask>(std::make_unique<Task>());
 
     print(hub);
 
