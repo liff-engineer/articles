@@ -11,12 +11,16 @@ public:
 protected:
     template<typename T, typename... Args>
     T* emplace(Args&&... args) {
-        return emplace_impl<T>(std::forward<Args>(args)...);
+        using H = typename Holder<T, Args...>::type;
+        auto obj = std::make_unique<Value<T, H::type>>(H::get, std::forward<Args>(args)...);
+        auto result = obj->get();
+        m_entrys.emplace_back(std::move(obj));
+        return result;
     }
 
     template<typename T>
     std::size_t erase() noexcept {
-        auto code = typeid(T).name();
+        static auto code = typeid(T).name();
         std::size_t result{};
         for (auto& e : m_entrys) {
             if (!e || std::strcmp(e->code(), code) != 0)
@@ -29,7 +33,7 @@ protected:
 
     template<typename T>
     std::size_t erase(const T* obj) noexcept {
-        auto code = typeid(T).name();
+        static auto code = typeid(T).name();
         std::size_t result{};
         for (auto& e : m_entrys) {
             if (!e || std::strcmp(e->code(), code) != 0)
@@ -46,7 +50,7 @@ protected:
 
     template<typename T, typename Fn>
     void visit(Fn&& fn) const noexcept {
-        auto code = typeid(T).name();
+        static auto code = typeid(T).name();
         for (auto& e : m_entrys) {
             if (!e || std::strcmp(e->code(), code) != 0)
                 continue;
@@ -56,78 +60,60 @@ protected:
         }
     }
 private:
-    template<typename T, typename U>
-    T* emplace_impl(U&& arg) {
-        using H = typename Holder<T, std::remove_cv_t<std::remove_reference_t<U>>>::type;
-        auto obj = std::make_unique<Value<T, H>>(std::forward<U>(arg));
-        auto result = obj->get();
-        m_entrys.emplace_back(std::move(obj));
-        return result;
-    }
+    template<typename T, typename U, typename E = void>
+    struct HolderTrait {
+        using type = std::conditional_t<std::is_base_of_v<T, U>, U, T>;
+        static T* get(type& obj) { return &obj; }
+    };
 
-    template<typename T, typename... Args>
-    T* emplace_impl(Args&&... args) {
-        auto obj = std::make_unique<Value<T>>(std::forward<Args>(args)...);
-        auto result = obj->get();
-        m_entrys.emplace_back(std::move(obj));
-        return result;
-    }
+    template<typename T, typename U>
+    struct HolderTrait<T, U*, std::enable_if_t<std::is_base_of_v<T, U>>> {
+        using type = U*;
+        static T* get(type& obj) { return obj; }
+    };
+
+    template<typename T, typename U>
+    struct HolderTrait<T, std::shared_ptr<U>, std::enable_if_t<std::is_base_of_v<T, U>>> {
+        using type = std::shared_ptr<U>;
+        static T* get(type& obj) { return obj.get(); }
+    };
+
+    template<typename T, typename U>
+    struct HolderTrait<T, std::unique_ptr<U>, std::enable_if_t<std::is_base_of_v<T, U>>> {
+        using type = std::unique_ptr<U>;
+        static T* get(type& obj) { return obj.get(); }
+    };
+
+    template<typename T, typename...Args>
+    struct Holder {
+        using type = HolderTrait<T, T>;
+    };
+
+    template<typename T, typename U>
+    struct Holder<T, U> {
+        using type = HolderTrait<T, std::remove_cv_t<std::remove_reference_t<U>>>;
+    };
 private:
     struct IEntry {
         virtual const char* code() const noexcept = 0;
     };
 
-    template<typename I>
-    struct Entry :public IEntry {
-        virtual I* get() noexcept = 0;
-        const char* code() const noexcept final { return typeid(I).name(); }
-    };
-
-    template<typename T, typename U, typename = void>
-    struct Holder {
-        using type = T;
-    };
-
-    template<typename T, typename U>
-    struct Holder<T, U*, std::enable_if_t<std::is_base_of<T, U>::value>> {
-        using type = U*;
-    };
-
-    template<typename T, typename U>
-    struct Holder<T, std::shared_ptr<U>, std::enable_if_t<std::is_base_of<T, U>::value>> {
-        using type = std::shared_ptr<U>;
-    };
-
-    template<typename T, typename U>
-    struct Holder<T, std::unique_ptr<U>, std::enable_if_t<std::is_base_of<T, U>::value>> {
-        using type = std::unique_ptr<U>;
-    };
-
     template<typename T>
-    struct Getter {
-        template<typename U>
-        T* get(U& obj) const noexcept { return &obj; }
-
-        template<typename U>
-        T* get(U* obj) const noexcept { return obj; }
-
-        template<typename U>
-        T* get(std::unique_ptr<U>& obj) const noexcept { return obj.get(); }
-
-        template<typename U>
-        T* get(std::shared_ptr<U>& obj) const noexcept { return obj.get(); }
+    struct Entry :public IEntry {
+        virtual T* get() noexcept = 0;
+        const char* code() const noexcept final { return typeid(T).name(); }
     };
 
-    template<typename T, typename Holder = T>
-    class Value final :public Entry<T> {
+    template<typename T, typename Holder>
+    struct Value final :Entry<T> {
     public:
         template<typename... Args>
-        explicit Value(Args&&... args)
-            :m_obj(std::forward<Args>(args)...)
-        {};
-        T* get() noexcept override { return Getter<T>{}.get(m_obj); }
+        explicit Value(T* (*op)(Holder&), Args&&... args)
+            :m_obj(std::forward<Args>(args)...), m_op(op) {};
+        T* get() noexcept override { return m_op(m_obj); }
     private:
         Holder m_obj;
+        T* (*m_op)(Holder&);
     };
 private:
     std::vector<std::unique_ptr<IEntry>> m_entrys;
@@ -171,8 +157,10 @@ int main() {
     auto v = hub.emplace<std::string>("liff.engineer@gmail.com");
     hub.emplace<std::string>(std::make_unique<std::string>("unique_ptr"));
     hub.emplace<std::string>(std::make_shared<std::string>("shared_ptr"));
+    hub.emplace<std::string>(v->begin(),v->end());
     hub.emplace<std::string>(v);
     hub.emplace<ITask>(std::make_unique<Task>());
+    hub.emplace<ITask>(Task{});
 
     print(hub);
 
