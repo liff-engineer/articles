@@ -1,0 +1,10 @@
+\build
+\dist
+\prefab.egg-info
+\__pycache__
+\.vscode
+*.ts
+*.qm
+*.ggdblog
+*.ggdblog.dat
+buildcfg.py
