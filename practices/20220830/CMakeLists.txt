@@ -11,3 +11,10 @@ target_sources(Modifyer
     PRIVATE DataRef.hpp 
             DataRefApp.cpp
 )
+
+add_executable(As)
+
+target_sources(As
+    PRIVATE As.hpp 
+            AsApp.cpp
+)
