@@ -9,7 +9,7 @@ public:
     struct Tag {};
 
     virtual ~IValue() = default;
-    virtual void print() const noexcept = 0;
+    virtual void print() const = 0;
 };
 
 template<typename... Args>
@@ -18,12 +18,15 @@ std::unique_ptr<IValue> CreateValue(Args&&... args) {
     return nullptr;
 }
 
+//是否可以考虑修改为NULL OBJECT形式?
 class Value {
     std::unique_ptr<IValue> m_v;
 public:
+    Value() = default;
+
     template<typename... Args>
-    Value(Args&&... args)
-        :m_v(CreateValue(IValue::Tag{}, std::forward<Args>(args)...))
+    explicit Value(Args&&... args)
+        :m_v(CreateValue(IValue::Tag{},std::forward<Args>(args)...))
     {};
 
     explicit operator bool() const noexcept {
@@ -41,8 +44,8 @@ public:
 class Int :public IValue {
     int m_v;
 public:
-    explicit Int(int v) :m_v(v) {};
-    void print() const noexcept {
+    explicit Int(int v) noexcept :m_v(v) {};
+    void print() const override {
         std::cout << __FUNCSIG__ << ":" << m_v << "\n";
     }
 };
@@ -50,8 +53,8 @@ public:
 class Bool :public IValue {
     bool m_v;
 public:
-    explicit Bool(bool v) :m_v(v) {};
-    void print() const noexcept {
+    explicit Bool(bool v) noexcept :m_v(v) {};
+    void print() const override {
         std::cout << __FUNCSIG__ << ":" << m_v << "\n";
     }
 };
@@ -59,8 +62,8 @@ public:
 class Double :public IValue {
     double m_v;
 public:
-    explicit Double(double v) :m_v(v) {};
-    void print() const noexcept {
+    explicit Double(double v) noexcept :m_v(v) {};
+    void print() const override {
         std::cout << __FUNCSIG__ << ":" << m_v << "\n";
     }
 };
@@ -69,8 +72,8 @@ public:
 class String :public IValue {
     std::string m_v;
 public:
-    explicit String(std::string&& v) :m_v(std::move(v)) {};
-    void print() const noexcept {
+    explicit String(std::string&& v) noexcept :m_v(std::move(v)) {};
+    void print() const override {
         std::cout << __FUNCSIG__ << ":" << m_v << "\n";
     }
 };
@@ -95,6 +98,11 @@ std::unique_ptr<IValue> CreateValue(IValue::Tag, std::string&& v) {
 template<std::size_t N>
 std::unique_ptr<IValue> CreateValue(IValue::Tag, const char(&str)[N]) {
     return std::make_unique<String>(std::string{str});
+}
+
+void example(int* iv) noexcept {
+    if (iv == nullptr)return;
+    *iv += 3;
 }
 
 int main() {
