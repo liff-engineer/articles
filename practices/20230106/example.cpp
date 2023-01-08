@@ -10,13 +10,12 @@ public:
         :m_target{ std::move(target) } {
         if (!m_target.empty()) {
             abc::Message msg{ gExecuteStartTopic,m_target };
-            msg.send();
+            msg.broadcast();
         }
     }
     ~ExecuteRecorder()noexcept {
         if (!m_target.empty()) {
-            abc::Message{ gExecuteStopTopic,m_target }
-            .send();
+            abc::Message{ gExecuteStopTopic,m_target }.broadcast();
         }
     };
     ExecuteRecorder(const ExecuteRecorder&) = delete;
@@ -29,21 +28,30 @@ private:
 };
 
 #include <iostream>
-struct MessageHandler {
-    void operator()(abc::Message& msg) {
-        std::cout << msg.topic.data() << ":" << msg.tag << "\n";
+class MessageHandler {
+public:
+    MessageHandler()
+    {
+        //stubs.reserve(2);
+        stubs.emplace_back(abc::Message::RegisterHandler(gExecuteStartTopic, 
+            [&](auto& msg) { this->handle(msg); }));
+        stubs.emplace_back(abc::Message::RegisterHandler(gExecuteStopTopic,
+            [&](auto& msg) { this->handle(msg); }));
     }
+
+    void handle(abc::Message& msg) {
+        std::cout << msg.topic.c_str() << ":" << std::get<std::string>(msg.tag) << "\n";
+    }
+private:
+    std::vector<abc::MessageHandlerStub> stubs;
 };
 
-abc::MessageHandlerStub stubs[]{
-    abc::MessageHandlerStub{abc::Message::RegisterHandler(gExecuteStartTopic,gExecuteStartTopic,MessageHandler{})},
-    abc::MessageHandlerStub{abc::Message::RegisterHandler(gExecuteStopTopic,gExecuteStopTopic,MessageHandler{})}
-};
+namespace
+{
+    static MessageHandler gMessageHandler{};
+}
 
 int main() {
-    {
-        ExecuteRecorder recorder{ __FUNCSIG__ };
-    }
-
+    ExecuteRecorder recorder{ __FUNCSIG__ };
     return 0;
 }

@@ -2,51 +2,60 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <compare>
+#include <variant>
 
 namespace abc
 {
-    class StringTag {
-    public:
-        StringTag() = default;
-        explicit StringTag(const char* literal);
-
-        const char* data() const noexcept;
-        std::string str() const {
-            return data();
-        }
-
-        bool operator==(const StringTag& other) const noexcept {
-            return other.index == index;
-        }
-        bool operator!=(const StringTag& other) const noexcept {
-            return other.index != index;
-        }
-    private:
-        std::size_t index{ 0 };
-    };
-
     struct Message {
-        StringTag   topic;
-        std::string tag;
-        std::vector<std::pair<StringTag, std::string>> payload;
+    public:
+        class Key {
+        public:
+            Key() = default;
+            explicit Key(const char* literal);
+            const char* c_str() const noexcept;
+            auto operator<=>(const Key&)const = default;
+        private:
+            std::size_t index{ 0 };
+        };
 
-        void send() noexcept;
+        using Value = std::variant<
+            std::monostate,
+            bool,
+            std::int64_t,std::uint64_t,
+            double,
+            std::string
+        >;
+    public:
+        Key   topic;
+        Value tag;
+        std::vector<std::pair<Key, Value>> payload;
+
+        void broadcast();
         
-        static StringTag  RegisterHandler(StringTag code, StringTag topic, std::function<void(Message&)> handler);
+        static std::size_t RegisterHandler(Key topic, std::function<void(Message&)> handler);
     };
+
+    using StringTag = Message::Key;
 
     class MessageHandlerStub final {
     public:
-        explicit MessageHandlerStub(StringTag code)
-            :m_code(code) {};
+        explicit MessageHandlerStub(std::size_t index)
+            :m_index(index) {};
         ~MessageHandlerStub() noexcept;
 
         MessageHandlerStub(const MessageHandlerStub&) = delete;
         MessageHandlerStub& operator=(const MessageHandlerStub&) = delete;
 
-        MessageHandlerStub(MessageHandlerStub&&) noexcept = default;
-        MessageHandlerStub& operator=(MessageHandlerStub&&) noexcept = default;
+        MessageHandlerStub(MessageHandlerStub&& other) noexcept
+            :m_index{ std::exchange(other.m_index,std::size_t{}) } {};
+        MessageHandlerStub& operator=(MessageHandlerStub&& other) noexcept {
+            if (this != std::addressof(other)) {
+                m_index = std::exchange(other.m_index, m_index);
+            }
+            return *this;
+        }
     private:
-        StringTag m_code;
+        std::size_t m_index{};
     };
 }

@@ -2,10 +2,10 @@
 
 namespace abc
 {
-    struct StringTagRegistry final {
+    struct MessageKeyRegistry final {
         std::vector<std::string> elements;
 
-        StringTagRegistry()
+        MessageKeyRegistry()
             :elements{ std::string{} } {};
 
         std::size_t at(const char* literal) {
@@ -24,41 +24,30 @@ namespace abc
             return nullptr;
         }
 
-        static StringTagRegistry& Get() {
-            static StringTagRegistry object{};
+        static MessageKeyRegistry& Get() {
+            static MessageKeyRegistry object{};
             return object;
         }
     };
 
     struct MessageHandlerRegistry final {
         struct Handler {
-            StringTag code;
             StringTag topic;
             std::function<void(Message&)> op;
         };
 
         std::vector<Handler> elements;
 
-        StringTag add(StringTag code, StringTag topic, std::function<void(Message&)>&& handler) {
-            for (auto& e : elements) {
-                if (e.code == code) {
-                    e.topic = topic;
-                    e.op = std::move(handler);
-                    return code;
-                }
-            }
-            elements.emplace_back(Handler{ code,topic,std::move(handler) });
-            return code;
+        std::size_t add(StringTag topic, std::function<void(Message&)>&& handler) {
+            elements.emplace_back(Handler{ topic,std::move(handler) });
+            return elements.size();
         }
         
-        bool remove(StringTag code) noexcept {
-            for (auto& e : elements) {
-                if (e.code == code) {
-                    std::swap(e, Handler{});
-                    return true;
-                }
-            }
-            return false;
+        bool remove(std::size_t index) noexcept {
+            if (index == 0 || index > elements.size())
+                return false;
+            elements[index - 1] = Handler{};
+            return true;
         }
 
         static MessageHandlerRegistry& Get() {
@@ -66,47 +55,43 @@ namespace abc
             return object;
         }
 
-        void handle(Message& msg) const noexcept {
+        void handle(Message& msg) const {
             std::size_t n = elements.size();
-            try
-            {
-                for (auto i = std::size_t{}; i < n; i++) {
-                    auto&& e = elements[i];
-                    if (e.topic == StringTag{})
-                        continue;
-                    if (e.topic == msg.topic && e.op) {
-                        e.op(msg);
-                    }
+            for (auto i = std::size_t{}; i < n; i++) {
+                auto&& e = elements[i];
+                if (e.topic == StringTag{})
+                    continue;
+                if (e.topic == msg.topic && e.op) {
+                    e.op(msg);
                 }
-            }
-            catch (...) {
-                ;//
             }
         }
     };
 
-    StringTag::StringTag(const char* literal)
-        :index{ StringTagRegistry::Get().at(literal)}
+    Message::Key::Key(const char* literal)
+        :index{ MessageKeyRegistry::Get().at(literal) }
     {
     }
 
-    const char* StringTag::data() const noexcept
+    const char* Message::Key::c_str() const noexcept
     {
-        return  StringTagRegistry::Get().at(index);
+        return  MessageKeyRegistry::Get().at(index);
     }
 
-    void Message::send() noexcept
+    void Message::broadcast()
     {
         MessageHandlerRegistry::Get().handle(*this);
     }
 
-    StringTag Message::RegisterHandler(StringTag code, StringTag topic, std::function<void(Message&)> handler)
+    std::size_t Message::RegisterHandler(Key topic, std::function<void(Message&)> handler)
     {
-        return MessageHandlerRegistry::Get().add(code, topic, std::move(handler));
+        return MessageHandlerRegistry::Get().add(topic, std::move(handler));
     }
 
     MessageHandlerStub::~MessageHandlerStub() noexcept
     {
-        MessageHandlerRegistry::Get().remove(m_code);
+        if (m_index) {
+            MessageHandlerRegistry::Get().remove(m_index);
+        }
     }
 }
