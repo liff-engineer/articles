@@ -1,0 +1,5 @@
+- [P0201R6 `polymorphic_value`: A Polymorphic Value Type for C++](https://wg21.link/P0201)
+- [P1950R2 `indirect_value`: A Free-Store-Allocated Value Type For C++](https://wg21.link/P1950)
+- [GotW-ish Solution: The ‘clonable’ pattern](https://herbsutter.com/2019/10/03/gotw-ish-solution-the-clonable-pattern/)
+- [Beyond the Rules of Three, Five and Zero](https://www.sonarsource.com/blog/beyond-the-rules-of-three-five-and-zero/)
+- [Introducing the Rule of DesDeMovA](https://safecpp.com/2019/07/01/initial.html)
