@@ -13,3 +13,8 @@ add_executable(indirect
     indirect.cpp 
     indirect_value.h 
 )
+
+add_executable(DynValue 
+    DynValue.h 
+    ExDynValue.cpp
+)
